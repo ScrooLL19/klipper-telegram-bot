@@ -1582,18 +1582,25 @@ def _tunnel_worker():
                 m = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
                 if m:
                     url = m.group(0)
+                    if url == "https://trycloudflare.com":
+                        continue
                     if url != PUBLIC_WEBAPP_URL:
                         PUBLIC_WEBAPP_URL = url
                         log.info("Mini App URL: %s", url)
-                        res = tg_api("setChatMenuButton", {
-                            "chat_id": CHAT_ID,
-                            "menu_button": json.dumps({"type": "web_app", "text": "📱 Панель", "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
-                        })
-                        log.info("setChatMenuButton: %s", res)
+                        for _ in range(5):
+                            res = tg_api("setChatMenuButton", {
+                                "chat_id": CHAT_ID,
+                                "menu_button": json.dumps({"type": "web_app", "text": "📱 Панель", "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
+                            })
+                            log.info("setChatMenuButton: %s", res)
+                            if isinstance(res, dict) and res.get("ok"):
+                                break
+                            time.sleep(3)
             proc.wait()
         except Exception as e:
             log.warning("Tunnel err: %s", e)
         time.sleep(10)
+
 
 def start_webapp_services():
     try:
