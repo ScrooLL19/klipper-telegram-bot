@@ -4,7 +4,20 @@ echo "  Uninstalling Telegram Bot & Mini App"
 echo "=========================================="
 
 INSTALL_DIR="/root/printer_tg_bot"
-[ ! -d "$INSTALL_DIR" ] && INSTALL_DIR="$HOME/printer_tg_bot"
+BACKUP_FILE="/root/printer_tg_bot_backup.json"
+if [ ! -d "$INSTALL_DIR" ]; then
+    INSTALL_DIR="$HOME/printer_tg_bot"
+    BACKUP_FILE="$HOME/printer_tg_bot_backup.json"
+fi
+
+if [ -f "$INSTALL_DIR/printer_state.json" ]; then
+    printf "Keep backup of spools, counters and settings in %s? [y/N]: " "$BACKUP_FILE"
+    read KEEP_DATA
+    if [ "$KEEP_DATA" = "y" ] || [ "$KEEP_DATA" = "Y" ]; then
+        cp "$INSTALL_DIR/printer_state.json" "$BACKUP_FILE"
+        echo "-> Backup saved to $BACKUP_FILE"
+    fi
+fi
 
 if [ -f /etc/init.d/printer_tg_bot ]; then
     echo "-> Stopping OpenWrt service..."

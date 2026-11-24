@@ -3,10 +3,21 @@ set -e
 
 REPO_RAW="https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
 INSTALL_DIR="/root/printer_tg_bot"
-[ ! -w "/root" ] && INSTALL_DIR="$HOME/printer_tg_bot"
+BACKUP_FILE="/root/printer_tg_bot_backup.json"
+if [ ! -w "/root" ]; then
+    INSTALL_DIR="$HOME/printer_tg_bot"
+    BACKUP_FILE="$HOME/printer_tg_bot_backup.json"
+fi
 
 dl() {
-    python3 -c "import urllib.request; urllib.request.urlretrieve('$1', '$2')"
+    python3 -c "import urllib.request, time
+for i in range(5):
+    try:
+        urllib.request.urlretrieve('$1', '$2')
+        break
+    except Exception:
+        if i == 4: raise
+        time.sleep(2)"
 }
 
 echo "=========================================="
@@ -17,10 +28,16 @@ echo "=========================================="
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
+if [ -f "$BACKUP_FILE" ] && [ ! -f "$INSTALL_DIR/printer_state.json" ]; then
+    echo "-> Found previous backup! Restoring spools and counters..."
+    mv "$BACKUP_FILE" "$INSTALL_DIR/printer_state.json"
+fi
+
 echo "-> Downloading project files..."
 dl "$REPO_RAW/printer_tg_bot.py" "printer_tg_bot.py"
 dl "$REPO_RAW/webapp.html" "webapp.html"
 dl "$REPO_RAW/uninstall.sh" "uninstall.sh"
+tr -d '\r' < uninstall.sh > uninstall.sh.tmp && mv uninstall.sh.tmp uninstall.sh
 
 if [ ! -f config.ini ]; then
     dl "$REPO_RAW/config.ini" "config.ini"
