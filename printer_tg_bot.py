@@ -18,7 +18,7 @@ STATE_FILE = os.path.join(BASE_DIR, "printer_state.json")
 _defaults = {
     "telegram": {"token": "", "chat_id": ""},
     "printer": {
-        "moonraker_url": "http://localhost:7125",
+        "moonraker_url": "http://127.0.0.1:7125",
         "poll_interval": "5",
         "timezone_offset": "7",
         "digest_hour": "20",
@@ -50,7 +50,7 @@ config.read(SECRETS_FILE)  # secrets have highest priority
 
 TOKEN = config.get("telegram", "token", fallback="")
 CHAT_ID = config.get("telegram", "chat_id", fallback="")
-MOONRAKER = config.get("printer", "moonraker_url", fallback="http://localhost:7125")
+MOONRAKER = config.get("printer", "moonraker_url", fallback="http://127.0.0.1:7125")
 POLL_INTERVAL = config.getint("printer", "poll_interval", fallback=5)
 TIMEZONE_OFFSET = config.getint("printer", "timezone_offset", fallback=7)
 DIGEST_HOUR = config.getint("printer", "digest_hour", fallback=20)
@@ -370,11 +370,11 @@ def detect_environment():
         for c in cams:
             if c.get("enabled", True) and c.get("snapshot_url"):
                 u = c["snapshot_url"].strip()
-                candidates.append(("http://localhost" + u) if u.startswith("/") else u)
+                candidates.append(("http://127.0.0.1" + u) if u.startswith("/") else u)
         candidates.extend([
-            "http://localhost:8081/?action=snapshot",
-            "http://localhost:8080/?action=snapshot",
-            "http://localhost/webcam/?action=snapshot",
+            "http://127.0.0.1:8081/?action=snapshot",
+            "http://127.0.0.1:8080/?action=snapshot",
+            "http://127.0.0.1/webcam/?action=snapshot",
         ])
         for u in candidates:
             try:
