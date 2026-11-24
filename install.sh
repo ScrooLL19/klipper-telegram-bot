@@ -14,25 +14,47 @@ if [ ! -w "/root" ]; then
 fi
 
 dl() {
-    python3 -c "import urllib.request, time, sys
-def hook(b, bs, tot):
-    if tot > 0:
-        pct = min(100, int(b * bs * 100 / tot))
-        mb = (b * bs) / 1048576.0
-        tot_mb = tot / 1048576.0
-        sys.stdout.write('\r   [%-20s] %3d%% (%.1f / %.1f MB)' % ('#' * (pct // 5), pct, mb, tot_mb))
-        sys.stdout.flush()
-for i in range(5):
+    python3 -c "import urllib.request, time, sys, os
+u1 = '$1'
+u2 = u1.replace('https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main', 'https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main/')
+urls = [u1, u2] if u2 != u1 else [u1]
+dst = '$2'
+tmp = dst + '.part'
+if os.path.exists(tmp): os.remove(tmp)
+for i in range(6):
+    u = urls[i % len(urls)]
+    pos = os.path.getsize(tmp) if os.path.exists(tmp) else 0
     try:
-        urllib.request.urlretrieve('$1', '$2', reporthook=hook)
+        req = urllib.request.Request(u)
+        if pos > 0: req.add_header('Range', 'bytes=%d-' % pos)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            code = getattr(r, 'status', 200)
+            if code != 206: pos = 0
+            rem = int(r.headers.get('Content-Length') or 0)
+            tot = pos + rem
+            mode = 'ab' if (pos > 0 and code == 206) else 'wb'
+            with open(tmp, mode) as f:
+                while True:
+                    chunk = r.read(65536)
+                    if not chunk: break
+                    f.write(chunk)
+                    pos += len(chunk)
+                    if tot > 0:
+                        pct = min(100, int(pos * 100 / tot))
+                        sys.stdout.write('\r   [%-20s] %3d%% (%.1f / %.1f MB)' % ('#' * (pct // 5), pct, pos / 1048576.0, tot / 1048576.0))
+                        sys.stdout.flush()
         sys.stdout.write('\n')
+        os.replace(tmp, dst)
         break
     except Exception:
         sys.stdout.write('\n')
-        if i == 4: raise
-        print('   Retry %d/5...' % (i + 2))
+        if i == 5:
+            if os.path.exists(tmp): os.remove(tmp)
+            raise
+        print('   Resuming download (attempt %d/6)...' % (i + 2))
         time.sleep(2)"
 }
+
 
 
 echo "=========================================="

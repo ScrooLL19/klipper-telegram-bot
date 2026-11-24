@@ -71,7 +71,8 @@ sh /root/printer_tg_bot/uninstall.sh
 Подключитесь к принтеру по SSH и выполните:
 
 ```
-grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf; python3 -c "import urllib.request; open('/tmp/install.sh','wb').write(urllib.request.urlopen('https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh', timeout=15).read().replace(b'\r\n', b'\n'))" && sh /tmp/install.sh
+grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf; python3 -c "import urllib.request; urls=['https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh']; data=next((urllib.request.urlopen(u,timeout=8).read() for u in urls if not print('Trying:',u)),b''); open('/tmp/install.sh','wb').write(data.replace(b'\r\n',b'\n'))" && sh /tmp/install.sh
+
 ```
 
 ### 🗑 Удаление
