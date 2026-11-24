@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO_RAW="https://githubusercontent.com"
+REPO_RAW="https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
 INSTALL_DIR="/root/printer_tg_bot"
 [ ! -w "/root" ] && INSTALL_DIR="$HOME/printer_tg_bot"
 
