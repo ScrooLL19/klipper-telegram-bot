@@ -133,7 +133,7 @@ last_cam_fail_ts = 0.0
 def tg_api(method, payload, timeout=15):
     if not TOKEN:
         return {}
-    url = "https://telegram.org" + str(TOKEN) + "/" + str(method)
+    url = "https://api.telegram.org/*bot" + str(TOKEN) + "/" + str(method)
     p = dict(payload)
     if "reply_markup" in p and p["reply_markup"] and not isinstance(p["reply_markup"], str):
         p["reply_markup"] = json.dumps(p["reply_markup"])
@@ -181,7 +181,7 @@ def tg_answer_cb(cb_id, text=""):
 def tg_send_media(is_video, file_bytes, filename, mime, caption, kb=None, timeout=30):
     method = "sendVideo" if is_video else "sendPhoto"
     field = "video" if is_video else "photo"
-    url = "https://telegram.org" % (TOKEN, method)
+    url = "https://api.telegram.org/bot" % (TOKEN, method)
     bnd = uuid.uuid4().hex
     parts = [
         ("--" + bnd).encode(), b'Content-Disposition: form-data; name="chat_id"', b"", str(CHAT_ID).encode(),

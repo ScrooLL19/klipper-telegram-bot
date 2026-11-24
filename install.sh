@@ -134,9 +134,11 @@ start_service() {
     procd_close_instance
 }
 EOF
+    tr -d '\r' < /etc/init.d/printer_tg_bot > /tmp/init_b && mv /tmp/init_b /etc/init.d/printer_tg_bot
     chmod +x /etc/init.d/printer_tg_bot
     /etc/init.d/printer_tg_bot enable
     /etc/init.d/printer_tg_bot restart
+
 elif command -v systemctl >/dev/null 2>&1; then
     echo "-> Configuring systemd auto-start..."
     cat << EOF > /etc/systemd/system/printer_tg_bot.service
