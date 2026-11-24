@@ -25,9 +25,9 @@ for i in range(6):
     u = urls[i % len(urls)]
     pos = os.path.getsize(tmp) if os.path.exists(tmp) else 0
     try:
-        req = urllib.request.Request(u)
+        req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0'})
         if pos > 0: req.add_header('Range', 'bytes=%d-' % pos)
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=45) as r:
             code = getattr(r, 'status', 200)
             if code != 206: pos = 0
             rem = int(r.headers.get('Content-Length') or 0)
@@ -46,14 +46,15 @@ for i in range(6):
         sys.stdout.write('\n')
         os.replace(tmp, dst)
         break
-    except Exception:
+    except Exception as e:
         sys.stdout.write('\n')
         if i == 5:
             if os.path.exists(tmp): os.remove(tmp)
             raise
-        print('   Resuming download (attempt %d/6)...' % (i + 2))
-        time.sleep(2)"
+        print('   Resuming download (attempt %d/6, %s)...' % (i + 2, e))
+        time.sleep(3)"
 }
+
 
 
 
