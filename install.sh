@@ -57,7 +57,7 @@ if [ "$USE_CF" != "n" ] && [ "$USE_CF" != "N" ]; then
             x86_64|amd64)  CF_ARCH="amd64" ;;
             armv7*|arm*)   CF_ARCH="arm" ;;
         esac
-        CF_URL="https://github.com"
+        CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$CF_ARCH"
         echo "-> Downloading cloudflared ($CF_ARCH)..."
         dl "$CF_URL" "cloudflared"
         chmod +x cloudflared
