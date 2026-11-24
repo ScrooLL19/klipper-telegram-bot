@@ -29,9 +29,10 @@ Built purely on **Python 3 standard library** (no `pip` or external packages req
 Connect to your printer via SSH and run:
 
 ```
-python3 -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh', '/tmp/install.sh')" && sh /tmp/install.sh
+grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf; python3 -c "import urllib.request; open('/tmp/install.sh','wb').write(urllib.request.urlopen('https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh', timeout=15).read().replace(b'\r\n', b'\n'))" && sh /tmp/install.sh
+
 ```
-*(or via `curl` if your `wget` lacks HTTPS support: `curl -fsSL https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh | sh`)*
+
 
 The installer automatically downloads all files, fetches the matching `cloudflared` binary for your CPU architecture (`arm`, `arm64`, `amd64`), prompts for language, **TOKEN**, and **CHAT_ID**, and configures auto-start (`procd` on OpenWrt or `systemd` on Linux).
 
@@ -70,9 +71,8 @@ sh /root/printer_tg_bot/uninstall.sh
 Подключитесь к принтеру по SSH и выполните:
 
 ```
-python3 -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh', '/tmp/install.sh')" && sh /tmp/install.sh
+grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf; python3 -c "import urllib.request; open('/tmp/install.sh','wb').write(urllib.request.urlopen('https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh', timeout=15).read().replace(b'\r\n', b'\n'))" && sh /tmp/install.sh
 ```
-*(или через `curl`, если `wget` без HTTPS: `curl -fsSL https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main/install.sh | sh`)*
 
 ### 🗑 Удаление
 

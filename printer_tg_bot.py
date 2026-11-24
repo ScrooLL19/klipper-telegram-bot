@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # ==================== 1. CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -133,17 +133,29 @@ last_cam_fail_ts = 0.0
 def tg_api(method, payload, timeout=15):
     if not TOKEN:
         return {}
-    url = "https://api.telegram.org/bot" + str(TOKEN) + "/" + str(method)
+    url = "https://telegram.org" + str(TOKEN) + "/" + str(method)
     p = dict(payload)
     if "reply_markup" in p and p["reply_markup"] and not isinstance(p["reply_markup"], str):
         p["reply_markup"] = json.dumps(p["reply_markup"])
     data = urllib.parse.urlencode(p).encode()
-    try:
-        with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
-            return json.loads(r.read().decode())
-    except Exception as e:
-        log.warning("Telegram API error (%s): %s", method, e)
-        return {}
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except Exception as e:
+            err_s = str(e).lower()
+            if ("name or service not known" in err_s or "temporary failure" in err_s) and os.access("/etc/resolv.conf", os.W_OK):
+                try:
+                    with open("/etc/resolv.conf", "r+") as rf:
+                        txt = rf.read()
+                        if "8.8.8.8" not in txt:
+                            rf.write("\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+                except Exception:
+                    pass
+            log.warning("TG %s err (try %d): %s", method, attempt + 1, e)
+            time.sleep(2)
+    return {}
+
 
 def tg_send(text, kb=None):
     p = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}

@@ -1,5 +1,9 @@
 #!/bin/sh
 set -e
+if [ -w /etc/resolv.conf ] && ! grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null; then
+    printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf
+fi
+
 
 REPO_RAW="https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
 INSTALL_DIR="/root/printer_tg_bot"
