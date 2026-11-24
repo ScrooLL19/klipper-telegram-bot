@@ -85,10 +85,13 @@ chmod +x printer_tg_bot.py uninstall.sh
 
 if [ ! -f secrets.ini ]; then
     echo ""
-    printf "Enter your Telegram Bot TOKEN from @BotFather: "
-    read BOT_TOKEN
-    printf "Enter your Telegram CHAT_ID: "
-    read BOT_CHAT_ID
+     printf "Enter your Telegram Bot TOKEN from @BotFather: "
+     read BOT_TOKEN
+     BOT_TOKEN=$(printf "%s" "$BOT_TOKEN" | tr -cd '0-9A-Za-z_:-')
+     printf "Enter your Telegram CHAT_ID: "
+     read BOT_CHAT_ID
+ BOT_CHAT_ID=$(printf "%s" "$BOT_CHAT_ID" | tr -cd '0-9-')
+
     cat << EOF > secrets.ini
 [telegram]
 token = $BOT_TOKEN
