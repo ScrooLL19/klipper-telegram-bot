@@ -1,0 +1,6 @@
+secrets.ini
+printer_state.json
+printer_tg_bot.log*
+cloudflared
+__pycache__/
+*.tmp

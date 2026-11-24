@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Панель принтера</title>
+<script src="https://telegram.org"></script>
+<style>
+  :root { --bg: var(--tg-theme-bg-color, #17212b); --sec: var(--tg-theme-secondary-bg-color, #232e3c); --txt: var(--tg-theme-text-color, #f5f5f5); --hint: var(--tg-theme-hint-color, #8b9bb4); --btn: var(--tg-theme-button-color, #2ea6ff); --btn-txt: var(--tg-theme-button-text-color, #ffffff); }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { background: var(--bg); color: var(--txt); padding: 12px 12px 76px; font-size: 14px; }
+  .tab { display: none; } .tab.active { display: block; }
+  .card { background: var(--sec); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .title { font-size: 15px; font-weight: 700; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .muted { color: var(--hint); font-size: 12px; }
+  .cam-wrap { position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #0e141a; min-height: 180px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+  .cam-wrap img { width: 100%; display: block; }
+  .bar-bg { width: 100%; height: 8px; background: rgba(128,128,128,0.25); border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  .bar-fill { height: 100%; background: var(--btn); transition: width .3s; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-box { background: rgba(128,128,128,0.1); border-radius: 10px; padding: 10px; }
+  .stat-val { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  .btn { border: none; border-radius: 10px; padding: 10px 12px; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--btn); color: var(--btn-txt); width: 100%; }
+  .btn-sec { background: rgba(128,128,128,0.2); color: var(--txt); } .btn-red { background: #e53935; color: #fff; } .btn-sm { padding: 6px 9px; font-size: 12px; width: auto; }
+  .slot-row, .cfg-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,0.15); gap: 8px; }
+  .slot-row:last-child, .cfg-row:last-child { border-bottom: none; }
+  .dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.3); flex-shrink: 0; }
+  select, input[type=text], input[type=number] { background: var(--bg); color: var(--txt); border: 1px solid rgba(128,128,128,0.35); border-radius: 8px; padding: 7px 9px; font-size: 13px; }
+  .cfg-row input[type=number] { width: 92px; text-align: right; }
+  .spool-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,0.15); gap: 6px; }
+  .pills { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 10px; }
+  .pill { padding: 5px 11px; border-radius: 20px; background: rgba(128,128,128,0.18); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .pill.active { background: var(--btn); color: var(--btn-txt); }
+  .nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--sec); display: flex; border-top: 1px solid rgba(128,128,128,0.2); padding: 6px 0; z-index: 50; }
+  .nav button { flex: 1; background: none; border: none; color: var(--hint); font-size: 10px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
+  .nav button.active { color: var(--btn); } .nav span.ico { font-size: 17px; }
+  .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 100; align-items: center; justify-content: center; padding: 16px; }
+  .modal.open { display: flex; }
+  .modal-box { background: var(--sec); border-radius: 16px; padding: 16px; width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 10px; }
+</style>
+</head>
+<body>
+<div id="tab-printer" class="tab active"><div class="card"><div class="title"><span>📷 Камера принтера</span><div style="display:flex;gap:6px"><button class="btn btn-sec btn-sm" onclick="toggleLight()">💡 Свет</button><button class="btn btn-sec btn-sm" onclick="reloadCam()">🔄</button></div></div><div class="cam-wrap"><img id="cam-img" src="" alt="Камера недоступна"></div><div class="grid2" style="margin-bottom:10px"><div class="stat-box"><div class="muted">🌡 Сопло</div><div class="stat-val" id="t-noz">-- / --°C</div></div><div class="stat-box"><div class="muted">🛏 Стол</div><div class="stat-val" id="t-bed">-- / --°C</div></div></div><div class="title" style="margin-bottom:4px"><span id="st-badge">⏳ Загрузка...</span><span id="st-pct" class="muted">0%</span></div><div id="st-file" class="muted" style="word-break:break-all"></div><div class="bar-bg"><div id="st-bar" class="bar-fill" style="width:0%"></div></div><div id="st-layer" class="muted" style="margin-bottom:10px"></div><div id="ctrl-btns" class="grid2" style="display:none"><button id="btn-pause" class="btn btn-sec" onclick="printerCmd('pause')">⏸ Пауза</button><button class="btn btn-red" onclick="if(confirm('Остановить печать?')) printerCmd('cancel')">⏹ Стоп</button></div></div></div>
+<div id="tab-spools" class="tab"><div class="card"><div class="title"><span>🧵 Учёт склада катушек</span><button id="btn-track-toggle" class="btn btn-sm" onclick="toggleSpoolTracking()">Вкл</button></div><div class="muted">Автоматически списывает пластик и следит за остатками</div></div><div id="spools-body"><div id="cfs-card" class="card" style="display:none"><div class="title"><span>📦 Слоты CFS</span><span id="cfs-env" class="muted"></span></div><div id="cfs-list"></div></div><div id="single-card" class="card" style="display:none"><div class="title"><span>🧵 Активная катушка</span></div><select id="single-sel" style="width:100%" onchange="assignSlot('SINGLE', this.value)"></select></div><div class="card"><div class="title"><span>🗄 Склад катушек</span><div style="display:flex;gap:6px"><button id="btn-sort" class="btn btn-sec btn-sm" onclick="cycleSort()">⇅ №</button><button class="btn btn-sm" onclick="openSpoolModal()">+ Добавить</button></div></div><div id="mat-pills" class="pills"></div><div id="spools-list"></div></div></div></div>
+<div id="tab-stats" class="tab"><div class="card"><div class="title"><span>📈 Сводка и затраты</span></div><div class="grid2" id="stats-grid"></div></div><div class="card"><div class="title"><span>🧵 Расход по типам пластика</span></div><div style="display:flex;align-items:center;gap:14px"><canvas id="donut-cv" width="130" height="130"></canvas><div id="donut-legend" style="flex:1;font-size:12px"></div></div></div><div class="card"><div class="title"><span>⏱ Печать по дням (последние 7 дн.)</span></div><canvas id="bar-cv" width="320" height="150" style="width:100%"></canvas></div></div>
+<div id="tab-maint" class="tab"><div class="card"><div class="title"><span>🔩 Ресурс узлов и ТО</span></div><div id="cons-list"></div></div><div class="card"><div class="title"><span>🛠 Прогон осей (смазка)</span></div><div class="grid2" style="grid-template-columns:1fr 1fr 1fr"><button class="btn btn-sec" onclick="moveAxis('x')">↔️ Ось X</button><button class="btn btn-sec" onclick="moveAxis('y')">↕️ Ось Y</button><button class="btn btn-sec" onclick="moveAxis('z')">⬆️ Ось Z</button></div></div></div>
+<div id="tab-settings" class="tab"><div class="card"><div class="title"><span>🚀 Обновление бота</span><span id="app-ver" class="muted">v1.0.0</span></div><div id="upd-status" class="muted" style="margin-bottom:8px">Проверка новых версий из репозитория GitHub</div><div style="display:flex;gap:8px"><button class="btn btn-sec" onclick="checkUpdate()">🔄 Проверить</button><button id="btn-do-upd" class="btn" style="display:none" onclick="applyUpdate()">⬇️ Установить</button></div></div><div class="card"><div class="title"><span>💰 Тарифы и амортизация</span></div><div class="cfg-row"><span>Свет (руб/кВт·ч)</span><input type="number" step="0.01" id="cfg-elec"></div><div class="cfg-row"><span>Мощность (кВт)</span><input type="number" step="0.01" id="cfg-kw"></div><div class="cfg-row"><span>Амортизация (руб/ч)</span><input type="number" step="1" id="cfg-depr"></div></div><div class="card"><div class="title"><span>🧵 Цены пластика (руб/кг)</span></div><div id="cfg-prices"></div></div><div class="card"><div class="title"><span>🔩 Лимиты ТО и уведомления</span></div><div class="cfg-row"><span>Интервал ТО (ч)</span><input type="number" id="cfg-maint"></div><div class="cfg-row"><span>Ресурс сопла (м)</span><input type="number" id="cfg-nozzle"></div><div class="cfg-row"><span>Ресурс фильтра (ч)</span><input type="number" id="cfg-filter"></div><div class="cfg-row"><span>Ресурс PTFE (м)</span><input type="number" id="cfg-ptfe"></div><div class="cfg-row"><span>Ресурс ножа (резов)</span><input type="number" id="cfg-cutter"></div><div class="cfg-row"><span>Порог влажности CFS (%)</span><input type="number" id="cfg-hum"></div><div class="cfg-row"><span>Часовой пояс (UTC+)</span><input type="number" id="cfg-tz"></div><div class="cfg-row"><span>Час дайджеста (Вс)</span><input type="number" id="cfg-digest"></div></div><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button></div>
+<div id="sp-modal" class="modal"><div class="modal-box"><div class="title"><span id="m-title">Новая катушка</span><span style="cursor:pointer" onclick="closeModal()">✖</span></div><input type="hidden" id="m-id"><select id="m-mat"><option>PLA</option><option>PETG</option><option>TPU</option><option>ABS</option><option>ASA</option><option>PA-CF</option><option>PC</option></select><input type="text" id="m-name" placeholder="Цвет / название"><input type="number" id="m-rem" placeholder="Чистый остаток в граммах"><div class="muted">⚖️ Или взвесьте с пустой катушкой:</div><div class="grid2"><input type="number" id="m-gross" placeholder="Общий вес (г)" oninput="calcTare()"><input type="number" id="m-tare" value="200" placeholder="Вес шпули (г)" oninput="calcTare()"></div><div class="grid2"><button class="btn btn-sec" onclick="closeModal()">Отмена</button><button class="btn" onclick="saveSpool()">Сохранить</button></div></div></div>
+<nav class="nav"><button class="active" onclick="switchTab('printer', this)"><span class="ico">📊</span>Принтер</button><button onclick="switchTab('spools', this)"><span class="ico">🧵</span>Катушки</button><button onclick="switchTab('stats', this)"><span class="ico">📈</span>Графики</button><button onclick="switchTab('maint', this)"><span class="ico">🔩</span>ТО</button><button onclick="switchTab('settings', this)"><span class="ico">⚙️</span>Настройки</button></nav>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+if (tg) { tg.ready(); tg.expand(); }
+let STATE = null, matFilter = "ALL", sortMode = "id", camTimer = null;
+async function api(url, body = {}) {
+  const qs = new URLSearchParams();
+  Object.keys(body).forEach(k => { if (body[k] !== null && body[k] !== undefined) qs.set(k, body[k]); });
+  qs.set("_t", Date.now());
+  const r = await fetch(url + "?" + qs.toString());
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return await r.json();
+}
+function switchTab(name, btn) {
+  document.querySelectorAll(".tab").forEach(el => el.classList.remove("active"));
+  document.querySelectorAll(".nav button").forEach(el => el.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  btn.classList.add("active");
+  if (name === "printer") reloadCam();
+  if (name === "stats" && STATE) drawCharts();
+  if (name === "settings" && STATE) fillSettingsForm();
+}
+function cycleSort() {
+  sortMode = sortMode === "id" ? "desc" : (sortMode === "desc" ? "asc" : "id");
+  document.getElementById("btn-sort").textContent = sortMode === "id" ? "⇅ №" : (sortMode === "desc" ? "⬇️ Вес" : "⬆️ Вес");
+  renderAll();
+}
+function reloadCam() {
+  clearTimeout(camTimer);
+  const img = document.getElementById("cam-img");
+  img.onload = img.onerror = () => {
+    if (!document.hidden && document.getElementById("tab-printer").classList.contains("active")) {
+      camTimer = setTimeout(reloadCam, 2000);
+    }
+  };
+  img.src = "/api/cam.jpg?t=" + Date.now();
+}
+async function toggleLight() { await api("/api/light/toggle"); setTimeout(reloadCam, 600); }
+async function refresh() {
+  try {
+    const data = await api("/api/state");
+    if (data.error) { document.getElementById("st-badge").textContent = "⚠️ " + data.error; return; }
+    STATE = data; renderAll();
+  } catch (e) { document.getElementById("st-badge").textContent = "⚠️ Ошибка: " + e.message; }
+}
+function renderAll() {
+  const p = STATE.printer, cfg = STATE.settings || {};
+  if (STATE.version) document.getElementById("app-ver").textContent = "v" + STATE.version;
+  document.getElementById("t-noz").textContent = `${p.nozzle_t ?? 0} / ${p.nozzle_target ?? 0}°C`;
+  document.getElementById("t-bed").textContent = `${p.bed_t ?? 0} / ${p.bed_target ?? 0}°C`;
+  const sMap = {printing:"🖨 Печатает", paused:"⏸ Пауза", complete:"🏁 Завершена", standby:"💤 Ожидание", error:"❌ Ошибка", cancelled:"⏹ Отменена"};
+  document.getElementById("st-badge").textContent = sMap[p.state] || p.state;
+  document.getElementById("st-pct").textContent = p.progress + "%";
+  document.getElementById("st-file").textContent = p.filename || "Нет активного файла";
+  document.getElementById("st-bar").style.width = p.progress + "%";
+  document.getElementById("st-layer").textContent = (p.layer && p.total_layer) ? `Слой ${p.layer} из ${p.total_layer}` : "";
+  const ctrl = document.getElementById("ctrl-btns");
+  if (p.state === "printing" || p.state === "paused") {
+    ctrl.style.display = "grid";
+    const bp = document.getElementById("btn-pause");
+    bp.textContent = p.state === "paused" ? "▶️ Продолжить" : "⏸ Пауза";
+    bp.onclick = () => printerCmd(p.state === "paused" ? "resume" : "pause");
+  } else { ctrl.style.display = "none"; }
+
+  const trk = cfg.spool_tracking !== false;
+  const bTrk = document.getElementById("btn-track-toggle");
+  bTrk.textContent = trk ? "✅ Включён" : "❌ Отключён";
+  bTrk.className = "btn btn-sm " + (trk ? "" : "btn-sec");
+  document.getElementById("spools-body").style.display = trk ? "block" : "none";
+
+  const opts = STATE.spools.map(s => `<option value="${s.id}">#${s.id} ${s.mat} ${s.name} (${Math.round(s.rem_g)}г)</option>`).join("");
+  if (STATE.has_cfs) {
+    document.getElementById("cfs-card").style.display = "block";
+    document.getElementById("cfs-env").textContent = `${STATE.cfs_temp}°C | ${STATE.cfs_hum}%`;
+    document.getElementById("cfs-list").innerHTML = STATE.slots.map(sl => `<div class="slot-row"><div style="display:flex;align-items:center;gap:8px;min-width:95px"><div class="dot" style="background:${sl.hex}"></div><b>Слот ${sl.slot}${sl.active ? " ▶️" : ""}</b></div><select style="flex:1;max-width:210px" onchange="assignSlot('${sl.slot}', this.value)"><option value="0">${sl.spool_title}</option>${opts}</select></div>`).join("");
+    STATE.slots.forEach((sl, idx) => { if (sl.spool_id) document.querySelectorAll("#cfs-list select")[idx].value = sl.spool_id; });
+  } else {
+    document.getElementById("single-card").style.display = "block";
+    const sel = document.getElementById("single-sel");
+    sel.innerHTML = `<option value="0">-- Выберите катушку --</option>` + opts;
+    if (STATE.single_spool_id) sel.value = STATE.single_spool_id;
+  }
+  const lowCnt = STATE.spools.filter(s => s.rem_g < 150).length;
+  const mats = ["ALL", ...(lowCnt > 0 ? ["LOW"] : []), ...new Set(STATE.spools.map(s => s.mat))];
+  document.getElementById("mat-pills").innerHTML = mats.map(m => {
+    const lbl = m === "ALL" ? `Все (${STATE.spools.length})` : (m === "LOW" ? `⚠️ < 150г (${lowCnt})` : m);
+    return `<div class="pill ${matFilter===m?'active':''}" onclick="matFilter='${m}';renderAll()">${lbl}</div>`;
+  }).join("");
+  let shown = matFilter === "ALL" ? [...STATE.spools] : (matFilter === "LOW" ? STATE.spools.filter(s => s.rem_g < 150) : STATE.spools.filter(s => s.mat === matFilter));
+  if (sortMode === "desc") shown.sort((a,b) => b.rem_g - a.rem_g);
+  else if (sortMode === "asc") shown.sort((a,b) => a.rem_g - b.rem_g);
+  document.getElementById("spools-list").innerHTML = shown.map(s => {
+    const pct = Math.min(100, Math.round((s.rem_g / 1000) * 100));
+    const col = pct > 40 ? "#4caf50" : (pct > 15 ? "#ff9800" : "#e53935");
+    return `<div class="spool-item"><div style="flex:1;min-width:0"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b>#${s.id} ${s.mat} ${s.name}</b></div><div class="bar-bg" style="height:5px;margin:5px 0 2px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div><div class="muted">Остаток: <b>${Math.round(s.rem_g)} г</b> (${pct}%)</div></div><div style="display:flex;gap:4px;flex-shrink:0"><button class="btn btn-sec btn-sm" style="padding:6px 7px" onclick="deltaSpool(${s.id}, -10)">-10г</button><button class="btn btn-sec btn-sm" style="padding:6px 7px" onclick="deltaSpool(${s.id}, 10)">+10г</button><button class="btn btn-sec btn-sm" style="padding:6px 8px" onclick="openSpoolModal(${s.id})">✏️</button><button class="btn btn-red btn-sm" style="padding:6px 8px" onclick="delSpool(${s.id})">🗑</button></div></div>`;
+  }).join("");
+  const st = STATE.stats;
+  document.getElementById("stats-grid").innerHTML = `
+    <div class="stat-box"><div class="muted">Время печати</div><div class="stat-val">${st.hours} ч</div></div>
+    <div class="stat-box"><div class="muted">Надёжность</div><div class="stat-val">${st.reliability}%</div></div>
+    <div class="stat-box"><div class="muted">Расход пластика</div><div class="stat-val">${st.meters} м / ${st.spools_cnt} кат.</div></div>
+    <div class="stat-box"><div class="muted">За 7 / 30 дней</div><div class="stat-val">${st.h_7d} / ${st.h_30d} ч</div></div>
+    <div class="stat-box"><div class="muted">Прямые затраты</div><div class="stat-val">${st.direct_rub} ₽</div><div class="muted">пластик ${st.fil_rub} + свет ${st.elec_rub}</div></div>
+    <div class="stat-box"><div class="muted">С амортизацией</div><div class="stat-val">${st.full_rub} ₽</div></div>`;
+  const c = STATE.consumables;
+  const rows = [{t:"Плановое ТО (осталось)", cur: c.maint_max_h - c.maint_left_h, max: c.maint_max_h, lbl:`ост. ${c.maint_left_h} ч`, rst:null}, {t:"Сопло", cur: c.nozzle_m, max: c.nozzle_max, lbl:`${c.nozzle_m} / ${c.nozzle_max} м`, rst:"nozzle"}, {t:"Воздушный фильтр", cur: c.filter_h, max: c.filter_max, lbl:`${c.filter_h} / ${c.filter_max} ч`, rst:"filter"}, {t:"PTFE-трубка", cur: c.ptfe_m, max: c.ptfe_max, lbl:`${c.ptfe_m} / ${c.ptfe_max} м`, rst:"ptfe"}, {t:"Нож резака", cur: c.cutter, max: c.cutter_max, lbl:`${c.cutter} / ${c.cutter_max}`, rst:"cutter"}];
+  document.getElementById("cons-list").innerHTML = rows.map(r => {
+    const pct = Math.min(100, Math.round((r.cur / r.max) * 100));
+    const col = pct < 70 ? "#4caf50" : (pct < 90 ? "#ff9800" : "#e53935");
+    return `<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:center"><span><b>${r.t}</b>: <span class="muted">${r.lbl}</span></span>${r.rst ? `<button class="btn btn-sec btn-sm" onclick="resetCons('${r.rst}')">Сброс</button>` : ""}</div><div class="bar-bg"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
+  }).join("");
+  if (document.getElementById("tab-stats").classList.contains("active")) drawCharts();
+}
+function drawCharts() {
+  const mats = STATE.stats.materials || {}, keys = Object.keys(mats).sort((a,b) => mats[b] - mats[a]), cols = ["#2ea6ff","#4caf50","#ff9800","#e91e63","#9c27b0","#00bcd4"];
+  const cv = document.getElementById("donut-cv"), ctx = cv.getContext("2d"); ctx.clearRect(0,0,130,130);
+  const sum = keys.reduce((a,k) => a + mats[k], 0);
+  if (sum > 0) {
+    let ang = -Math.PI/2;
+    keys.forEach((k, i) => { const slice = (mats[k] / sum) * Math.PI * 2; ctx.beginPath(); ctx.moveTo(65,65); ctx.arc(65,65,58,ang,ang+slice); ctx.closePath(); ctx.fillStyle = cols[i % cols.length]; ctx.fill(); ang += slice; });
+    ctx.beginPath(); ctx.arc(65,65,34,0,Math.PI*2); ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--sec"); ctx.fill();
+  }
+  document.getElementById("donut-legend").innerHTML = keys.length ? keys.map((k,i) => `<div style="margin-bottom:4px"><span style="color:${cols[i%cols.length]}">●</span> <b>${k}</b>: ${mats[k].toFixed(1)} м</div>`).join("") : "<span class='muted'>Нет данных</span>";
+  const bcv = document.getElementById("bar-cv"), bctx = bcv.getContext("2d"); bctx.clearRect(0,0,320,150);
+  const vals = STATE.stats.days_hours || [], lbls = STATE.stats.days_labels || [], maxV = Math.max(1, ...vals);
+  vals.forEach((v, i) => {
+    const x = 14 + i * 43, h = Math.round((v / maxV) * 100), y = 122 - h;
+    bctx.fillStyle = "#2ea6ff"; bctx.fillRect(x, y, 26, h);
+    bctx.fillStyle = "#8b9bb4"; bctx.font = "10px sans-serif"; bctx.textAlign = "center";
+    bctx.fillText(lbls[i] || "", x + 13, 138); if (v > 0) bctx.fillText(v + "ч", x + 13, y - 4);
+  });
+}
+function fillSettingsForm() {
+  const c = STATE.settings || {};
+  document.getElementById("cfg-elec").value = c.elec_price ?? 5.43;
+  document.getElementById("cfg-kw").value = c.power_kw ?? 0.25;
+  document.getElementById("cfg-depr").value = c.depr_hour ?? 10;
+  document.getElementById("cfg-maint").value = c.maint_hours ?? 150;
+  document.getElementById("cfg-nozzle").value = c.nozzle_meters ?? 1000;
+  document.getElementById("cfg-filter").value = c.filter_hours ?? 500;
+  document.getElementById("cfg-ptfe").value = c.ptfe_meters ?? 2500;
+  document.getElementById("cfg-cutter").value = c.cutter_cuts ?? 5000;
+  document.getElementById("cfg-hum").value = c.cfs_humidity ?? 25;
+  document.getElementById("cfg-tz").value = c.timezone_offset ?? 7;
+  document.getElementById("cfg-digest").value = c.digest_hour ?? 20;
+  const pr = c.prices || {PLA:1200, PETG:1000, TPU:1650, ABS:1100, ASA:1300, "PA-CF":3200, PC:2200};
+  document.getElementById("cfg-prices").innerHTML = Object.keys(pr).map(k => `<div class="cfg-row"><span>${k}</span><input type="number" data-mat="${k}" value="${pr[k]}"></div>`).join("");
+}
+async function checkUpdate() {
+  const st = document.getElementById("upd-status"), btn = document.getElementById("btn-do-upd");
+  st.textContent = "⏳ Проверка репозитория GitHub..."; btn.style.display = "none";
+  const r = await api("/api/update/check");
+  if (!r.ok) { st.textContent = "⚠️ " + (r.error || "Ошибка проверки"); return; }
+  if (r.has_update) { st.textContent = `🆕 Доступна версия v${r.latest} (у вас v${r.current})`; btn.style.display = "block"; }
+  else { st.textContent = `✅ У вас установлена актуальная версия v${r.current}`; }
+}
+async function applyUpdate() {
+  const st = document.getElementById("upd-status");
+  st.textContent = "⏳ Скачивание и проверка кода...";
+  const r = await api("/api/update/apply");
+  if (!r.ok) { st.textContent = "⚠️ Ошибка обновления: " + r.error; return; }
+  st.textContent = `✅ Обновлено до v${r.updated_to}! Перезапуск...`;
+  setTimeout(() => location.reload(), 4000);
+}
+async function saveSettings() {
+  const prices = {};
+  document.querySelectorAll("#cfg-prices input").forEach(el => { prices[el.dataset.mat] = +el.value || 1200; });
+  await api("/api/settings/save", {
+    elec_price: document.getElementById("cfg-elec").value, power_kw: document.getElementById("cfg-kw").value,
+    depr_hour: document.getElementById("cfg-depr").value, maint_hours: document.getElementById("cfg-maint").value,
+    nozzle_meters: document.getElementById("cfg-nozzle").value, filter_hours: document.getElementById("cfg-filter").value,
+    ptfe_meters: document.getElementById("cfg-ptfe").value, cutter_cuts: document.getElementById("cfg-cutter").value,
+    cfs_humidity: document.getElementById("cfg-hum").value, timezone_offset: document.getElementById("cfg-tz").value,
+    digest_hour: document.getElementById("cfg-digest").value, prices_json: JSON.stringify(prices)
+  });
+  alert("✅ Настройки сохранены!"); refresh();
+}
+async function toggleSpoolTracking() {
+  const cur = (STATE.settings || {}).spool_tracking !== false;
+  await api("/api/settings/save", { spool_tracking: !cur }); refresh();
+}
+function calcTare() {
+  const g = parseFloat(document.getElementById("m-gross").value), t = parseFloat(document.getElementById("m-tare").value) || 0;
+  if (!isNaN(g) && g > 0) document.getElementById("m-rem").value = Math.max(0, Math.round(g - t));
+}
+function openSpoolModal(id = null) {
+  document.getElementById("m-id").value = id || ""; document.getElementById("m-gross").value = "";
+  if (id) { const s = STATE.spools.find(x => x.id === id); document.getElementById("m-title").textContent = "Редактировать #" + id; document.getElementById("m-mat").value = s.mat; document.getElementById("m-name").value = s.name; document.getElementById("m-rem").value = s.rem_g; }
+  else { document.getElementById("m-title").textContent = "Новая катушка"; document.getElementById("m-name").value = ""; document.getElementById("m-rem").value = "1000"; }
+  document.getElementById("sp-modal").classList.add("open");
+}
+function closeModal() { document.getElementById("sp-modal").classList.remove("open"); }
+async function saveSpool() { await api("/api/spool/save", { id: document.getElementById("m-id").value || null, mat: document.getElementById("m-mat").value, name: document.getElementById("m-name").value, rem_g: document.getElementById("m-rem").value }); closeModal(); refresh(); }
+async function deltaSpool(id, delta) { const s = STATE.spools.find(x => x.id === id); if (s) { s.rem_g = Math.max(0, s.rem_g + delta); renderAll(); } await api("/api/spool/delta", {id, delta}); }
+async function delSpool(id) { if (confirm("Удалить катушку #" + id + "?")) { await api("/api/spool/delete", {id}); refresh(); } }
+async function assignSlot(slot, spool_id) { if (+spool_id > 0) { await api("/api/slot/assign", {slot, spool_id}); refresh(); } }
+async function resetCons(target) { if (confirm("Сбросить счётчик?")) { await api("/api/reset", {target}); refresh(); } }
+async function moveAxis(axis) { await api("/api/move", {axis}); alert("Команда прогона оси " + axis.toUpperCase() + " отправлена"); }
+async function printerCmd(cmd) { await api("/api/printer/cmd", {cmd}); refresh(); }
+reloadCam(); refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 7000);
+</script>
+</body>
+</html>
