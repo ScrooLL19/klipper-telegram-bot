@@ -14,15 +14,26 @@ if [ ! -w "/root" ]; then
 fi
 
 dl() {
-    python3 -c "import urllib.request, time
+    python3 -c "import urllib.request, time, sys
+def hook(b, bs, tot):
+    if tot > 0:
+        pct = min(100, int(b * bs * 100 / tot))
+        mb = (b * bs) / 1048576.0
+        tot_mb = tot / 1048576.0
+        sys.stdout.write('\r   [%-20s] %3d%% (%.1f / %.1f MB)' % ('#' * (pct // 5), pct, mb, tot_mb))
+        sys.stdout.flush()
 for i in range(5):
     try:
-        urllib.request.urlretrieve('$1', '$2')
+        urllib.request.urlretrieve('$1', '$2', reporthook=hook)
+        sys.stdout.write('\n')
         break
     except Exception:
+        sys.stdout.write('\n')
         if i == 4: raise
+        print('   Retry %d/5...' % (i + 2))
         time.sleep(2)"
 }
+
 
 echo "=========================================="
 echo "  Installing Telegram Bot & Mini App"
