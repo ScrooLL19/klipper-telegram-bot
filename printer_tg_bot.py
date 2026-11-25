@@ -141,12 +141,17 @@ def tg_api(method, payload, timeout=15):
     if "reply_markup" in payload and payload["reply_markup"]:
         payload["reply_markup"] = json.dumps(payload["reply_markup"])
     data = urllib.parse.urlencode(payload).encode()
-    try:
-        with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
-            return json.loads(r.read().decode())
-    except Exception as e:
-        log.warning("Telegram API error (%s): %s", method, e)
-        return {}
+    last_err = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(3)
+    log.warning("Telegram API error (%s): %s", method, last_err)
+    return {}
 
 def tg_send(text, kb=None):
     p = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -1065,9 +1070,9 @@ def check_commands():
     global last_update_id
     while True:
         try:
-            # Long Polling: 25 секунд. Не грузит CPU, но быстро реагирует на сообщения.
             res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25}, timeout=30).get("result", [])
-            if not isinstance(res, list):
+            if not isinstance(res, list) or not res:
+                # Пусто или ошибка (409/DNS) — пауза, чтобы не долбить API
                 time.sleep(5)
                 continue
             for item in res:
@@ -1078,7 +1083,7 @@ def check_commands():
                     log.exception("Ошибка обработки апдейта %s", item.get("update_id"))
         except Exception:
             log.exception("Ошибка в цикле check_commands")
-            time.sleep(5)
+            time.sleep(10)
 
 def _handle_update(item):
     global awaiting_spool, edit_spool_id
@@ -1645,7 +1650,23 @@ def start_webapp_services():
     except Exception as e:
         log.warning("WebApp start err: %s", e)
 
+
 # ==================== 13. ОСНОВНОЙ ЦИКЛ МОНИТОРИНГА =================
+# Защита от двойного запуска: второй экземпляр убьёт первый через 409 Conflict
+import fcntl
+LOCK_FILE = os.path.join(BASE_DIR, "printer_tg_bot.lock")
+try:
+    _lock_fd = open(LOCK_FILE, "w")
+    fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    _lock_fd.write(str(os.getpid()))
+    _lock_fd.flush()
+except (IOError, OSError):
+    log.critical("Another printer_tg_bot instance is already running! Exiting.")
+    print("Another instance is already running! Exiting.")
+    sys.exit(0)
+
+detect_environment()
+start_webapp_services()
 detect_environment()
 start_webapp_services()
 
