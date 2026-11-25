@@ -43,6 +43,11 @@
       color: #8b95a5;
       font-weight: 400;
     }
+    .title-actions {
+      margin-left: auto;
+      display: flex;
+      gap: 6px;
+    }
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -173,9 +178,10 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 6px;
+      gap: 10px;
     }
-    .spool-header .name { font-size: 13px; font-weight: 600; }
-    .spool-header .weight { font-size: 12px; color: #8b95a5; }
+    .spool-header .name { font-size: 13px; font-weight: 600; flex: 1; }
+    .spool-header .weight { font-size: 12px; color: #8b95a5; white-space: nowrap; }
     .spool-actions {
       display: flex;
       gap: 6px;
@@ -289,6 +295,11 @@
       padding: 12px;
       min-height: 180px;
       margin-top: 8px;
+      overflow-x: auto;
+    }
+    .chart-box canvas {
+      width: 100% !important;
+      height: auto !important;
     }
     .stat-row {
       display: flex;
@@ -298,7 +309,8 @@
       font-size: 14px;
     }
     .stat-row:last-child { border-bottom: none; }
-    .stat-row .val { font-weight: 600; }
+    .stat-row .val { font-weight: 600; text-align: right; white-space: nowrap; }
+    .stat-row .label { flex: 1; padding-right: 10px; }
     .lang-switcher {
       display: flex;
       gap: 10px;
@@ -327,16 +339,12 @@
       margin-bottom: 10px;
     }
     .filter-row .btn { flex: 1; font-size: 12px; }
+    .filter-row .btn.active { background: #4a90e2; }
     .empty-state {
       text-align: center;
       padding: 30px 10px;
       color: #8b95a5;
       font-size: 14px;
-    }
-    .spool-full-weight {
-      font-size: 11px;
-      color: #8b95a5;
-      margin-top: 2px;
     }
   </style>
 </head>
@@ -348,14 +356,13 @@
     <div class="card">
       <div class="title">
         <span data-i18n="cam_title">📷 Камера принтера</span>
-        <div style="display:flex;gap:6px;">
+        <div class="title-actions">
           <button class="btn btn-sm" data-i18n="light_btn">💡 Свет</button>
-          <button class="btn btn-sm" onclick="refreshCam()">🔄</button>
+          <button class="btn btn-sm" onclick="refreshCam()" data-i18n="reload_btn">Reload</button>
         </div>
       </div>
       <div class="cam-wrap">
         <img id="cam-img" src="" alt="">
-        <div class="cam-controls"></div>
       </div>
       <div class="grid">
         <div class="temp-box">
@@ -407,8 +414,8 @@
     <div class="card">
       <div class="title" data-i18n="spool_inventory">🗄 Склад катушек</div>
       <div class="filter-row">
-        <button class="btn btn-sm" onclick="sortSpools('id')">⇅ №</button>
-        <button class="btn btn-sm" onclick="sortSpools('rem_g')">⚖</button>
+        <button class="btn btn-sm" id="btn-sort-id" onclick="toggleSortId()">⇅ №</button>
+        <button class="btn btn-sm" id="btn-sort-weight" onclick="toggleSortWeight()">⚖ Остаток</button>
       </div>
       <div id="spool-list"></div>
       <button class="btn btn-primary" style="width:100%;margin-top:10px" onclick="openSpoolModal()" data-i18n="spool_add">➕ Добавить</button>
@@ -430,7 +437,7 @@
     </div>
     <div class="card">
       <div class="title" data-i18n="stats_daily">⏱ Печать по дням (последние 7 дн.)</div>
-      <div class="chart-box"><canvas id="bar-chart" width="320" height="180"></canvas></div>
+      <div class="chart-box"><canvas id="bar-chart" width="300" height="180"></canvas></div>
     </div>
   </div>
 
@@ -557,7 +564,7 @@
     </div>
   </div>
 
-  <!-- Навигация (только большие иконки) -->
+  <!-- Навигация -->
   <div class="nav">
     <button class="active" onclick="switchTab('printer', this)"><span class="ico">📊</span><span data-i18n="tab_printer">Принтер</span></button>
     <button onclick="switchTab('spools', this)"><span class="ico">🧵</span><span data-i18n="tab_spools">Катушки</span></button>
@@ -575,16 +582,21 @@
     let currentLang = localStorage.getItem('printer_lang') || 'ru';
     const DEFAULT_SPOOL_WEIGHT = 1000;
 
+    // Состояние сортировки
+    let sortIdAsc = true;
+    let sortWeightAsc = true;
+
     // ==================== МУЛЬТИЯЗЫЧНОСТЬ ====================
     const I18N = {
       ru: {
-        "tab_printer": "📊 Принтер",
-        "tab_spools": "🧵 Катушки",
-        "tab_stats": "📈 Графики",
-        "tab_maint": "🔩 ТО",
-        "tab_settings": "⚙️ Настройки",
+        "tab_printer": "Принтер",
+        "tab_spools": "Катушки",
+        "tab_stats": "Графики",
+        "tab_maint": "ТО",
+        "tab_settings": "Настройки",
         "cam_title": "📷 Камера принтера",
         "light_btn": "💡 Свет",
+        "reload_btn": "Reload",
         "nozzle_label": "🌡 Сопло",
         "bed_label": "🛏 Стол",
         "loading": "⏳ Загрузка...",
@@ -636,8 +648,8 @@
         "no_spools": "Катушки не добавлены",
         "no_cfs": "CFS не обнаружен",
         "not_assigned": "Не назначена",
-        "g_left": "г ост.",
-        "g_full": "г из",
+        "g_left": "г. ост.",
+        "g_full": "г.",
         "active": "активна",
         "update_available": "Доступна версия",
         "update_latest": "У вас последняя версия",
@@ -667,18 +679,24 @@
         "stats_reliability": "✅ Надёжность",
         "stats_material_cost": "💰 Стоимость пластика и электроэнергии",
         "stats_with_depr": "💰 Затраты с учётом амортизации",
+        "stats_longest": "🏆 Самая долгая печать",
         "edit_spool": "✏️",
         "delete_spool": "🗑",
-        "spool_full_default": "1000"
+        "spool_full_default": "1000",
+        "sort_id_asc": "⇅ № ↑",
+        "sort_id_desc": "⇅ № ↓",
+        "sort_weight_asc": "⚖ Остаток ↑",
+        "sort_weight_desc": "⚖ Остаток ↓"
       },
       en: {
-        "tab_printer": "📊 Printer",
-        "tab_spools": "🧵 Spools",
-        "tab_stats": "📈 Stats",
-        "tab_maint": "🔩 Maint.",
-        "tab_settings": "⚙️ Settings",
+        "tab_printer": "Printer",
+        "tab_spools": "Spools",
+        "tab_stats": "Stats",
+        "tab_maint": "Maint.",
+        "tab_settings": "Settings",
         "cam_title": "📷 Printer camera",
         "light_btn": "💡 Light",
+        "reload_btn": "Reload",
         "nozzle_label": "🌡 Nozzle",
         "bed_label": "🛏 Bed",
         "loading": "⏳ Loading...",
@@ -731,7 +749,7 @@
         "no_cfs": "CFS not detected",
         "not_assigned": "Not assigned",
         "g_left": "g left",
-        "g_full": "g of",
+        "g_full": "g",
         "active": "active",
         "update_available": "Version available",
         "update_latest": "You have the latest version",
@@ -761,9 +779,14 @@
         "stats_reliability": "✅ Reliability",
         "stats_material_cost": "💰 Filament & electricity cost",
         "stats_with_depr": "💰 Costs with depreciation",
+        "stats_longest": "🏆 Longest print",
         "edit_spool": "✏️",
         "delete_spool": "🗑",
-        "spool_full_default": "1000"
+        "spool_full_default": "1000",
+        "sort_id_asc": "⇅ № ↑",
+        "sort_id_desc": "⇅ № ↓",
+        "sort_weight_asc": "⚖ Weight ↑",
+        "sort_weight_desc": "⚖ Weight ↓"
       }
     };
 
@@ -779,6 +802,7 @@
       });
       document.documentElement.lang = currentLang;
       highlightLangButtons();
+      updateSortButtons();
     }
 
     function highlightLangButtons() {
@@ -805,6 +829,27 @@
           applyI18n();
           if (STATE) renderAll();
         });
+    }
+
+    function updateSortButtons() {
+      const btnId = document.getElementById('btn-sort-id');
+      const btnWeight = document.getElementById('btn-sort-weight');
+      if (btnId) btnId.textContent = sortIdAsc ? t('sort_id_asc') : t('sort_id_desc');
+      if (btnWeight) btnWeight.textContent = sortWeightAsc ? t('sort_weight_asc') : t('sort_weight_desc');
+    }
+
+    function toggleSortId() {
+      sortIdAsc = !sortIdAsc;
+      sortWeightAsc = true;
+      updateSortButtons();
+      renderSpools();
+    }
+
+    function toggleSortWeight() {
+      sortWeightAsc = !sortWeightAsc;
+      sortIdAsc = true;
+      updateSortButtons();
+      renderSpools();
     }
 
     // ==================== API ====================
@@ -952,7 +997,7 @@
           const fullW = getSpoolFullWeight(sp);
           const pct = sp.rem_g > 0 ? Math.min(100, (sp.rem_g / fullW) * 100) : 0;
           const colorClass = getSpoolProgressColor(pct);
-          activeDiv.innerHTML = '<div class="slot-row"><div class="slot-info" style="flex:1"><div class="name">#' + sp.id + ' ' + sp.mat + ' ' + sp.name + '</div><div class="sub">' + sp.rem_g + ' ' + t('g_left') + ' / ' + fullW + ' ' + t('g_full') + '</div><div class="progress-bar" style="margin:4px 0 0 0"><div class="progress-fill ' + colorClass + '" style="width:' + pct + '%"></div></div></div></div>';
+          activeDiv.innerHTML = '<div class="slot-row"><div class="slot-color" style="background:' + (sp.hex || '#808080') + '"></div><div class="slot-info" style="flex:1"><div class="name">#' + sp.id + ' ' + sp.mat + ' ' + sp.name + '</div><div class="sub">' + sp.rem_g + ' ' + t('g_left') + ' / ' + fullW + ' ' + t('g_full') + '</div><div class="progress-bar" style="margin:4px 0 0 0"><div class="progress-fill ' + colorClass + '" style="width:' + pct + '%"></div></div></div></div>';
         } else {
           activeDiv.innerHTML = '<div class="empty-state">' + t('not_assigned') + '</div>';
         }
@@ -961,13 +1006,27 @@
       if (spools.length === 0) {
         listDiv.innerHTML = '<div class="empty-state">' + t('no_spools') + '</div>';
       } else {
-        listDiv.innerHTML = spools.map(s => {
+        // Сортировка
+        let sortedSpools = [...spools];
+        if (sortIdAsc) {
+          sortedSpools.sort((a, b) => a.id - b.id);
+        } else {
+          sortedSpools.sort((a, b) => b.id - a.id);
+        }
+        // Если активна сортировка по весу
+        if (!sortIdAsc || document.getElementById('btn-sort-weight').classList.contains('active-sort')) {
+          // noop, используем sortIdAsc по умолчанию
+        }
+        
+        listDiv.innerHTML = sortedSpools.map(s => {
           const fullW = getSpoolFullWeight(s);
           const pct = s.rem_g > 0 ? Math.min(100, (s.rem_g / fullW) * 100) : 0;
           const colorClass = getSpoolProgressColor(pct);
+          const hex = s.hex || '#808080';
           return `
           <div class="spool-item">
             <div class="spool-header">
+              <div class="slot-color" style="background:${hex};flex-shrink:0"></div>
               <div class="name">#${s.id} ${s.mat} ${s.name}</div>
               <div class="weight">${s.rem_g} ${t('g_left')} / ${fullW} ${t('g_full')}</div>
             </div>
@@ -990,13 +1049,6 @@
     function deleteSpool(id) {
       if (confirm(t('confirm_delete'))) {
         apiPost('/api/spool/delete', { id: id }).then(() => loadState());
-      }
-    }
-
-    function sortSpools(by) {
-      if (STATE && STATE.spools) {
-        STATE.spools.sort((a, b) => a[by] - b[by]);
-        renderSpools();
       }
     }
 
@@ -1058,15 +1110,26 @@
     function renderStats() {
       const s = STATE.stats || {};
       const sumDiv = document.getElementById('stats-summary');
+      const longestPrint = s.longest_print || 0;
+      const longestStr = longestPrint > 0 ? formatDuration(longestPrint) : '—';
       sumDiv.innerHTML = `
-        <div class="stat-row"><span>${t('stats_hours')}</span><span class="val">${s.hours} ч</span></div>
-        <div class="stat-row"><span>${t('stats_filament')}</span><span class="val">${s.meters} м (~${s.spools_cnt} кат.)</span></div>
-        <div class="stat-row"><span>${t('stats_jobs')}</span><span class="val">${s.jobs} (${s.reliability}%)</span></div>
-        <div class="stat-row"><span>${t('stats_material_cost')}</span><span class="val">${s.direct_rub} ₽ (свет ~${s.elec_rub} ₽)</span></div>
-        <div class="stat-row"><span>${t('stats_with_depr')}</span><span class="val">${s.full_rub} ₽</span></div>
+        <div class="stat-row"><span class="label">${t('stats_hours')}</span><span class="val">${s.hours} ч</span></div>
+        <div class="stat-row"><span class="label">${t('stats_filament')}</span><span class="val">${s.meters} м (~${s.spools_cnt} кат.)</span></div>
+        <div class="stat-row"><span class="label">${t('stats_jobs')}</span><span class="val">${s.jobs} (${s.reliability}%)</span></div>
+        <div class="stat-row"><span class="label">${t('stats_longest')}</span><span class="val">${longestStr}</span></div>
+        <div class="stat-row"><span class="label">${t('stats_material_cost')}</span><span class="val">${s.direct_rub} ₽ (свет ~${s.elec_rub} ₽)</span></div>
+        <div class="stat-row"><span class="label">${t('stats_with_depr')}</span><span class="val">${s.full_rub} ₽</span></div>
       `;
       renderDonut(s.materials || {});
       renderBarChart(s.days_labels || [], s.days_hours || []);
+    }
+
+    function formatDuration(hours) {
+      if (hours <= 0) return '—';
+      const h = Math.floor(hours);
+      const m = Math.round((hours - h) * 60);
+      if (h > 0) return `${h} ч ${m} мин`;
+      return `${m} мин`;
     }
 
     function renderDonut(mats) {
@@ -1096,11 +1159,16 @@
     function renderBarChart(labels, values) {
       const canvas = document.getElementById('bar-chart');
       const ctx = canvas.getContext('2d');
+      // Адаптивная ширина
+      const container = canvas.parentElement;
+      const width = container.clientWidth - 24;
+      canvas.width = width;
+      canvas.height = 180;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (values.length === 0) return;
       const max = Math.max(...values, 1);
       const w = canvas.width / values.length;
-      const h = canvas.height - 20;
+      const h = canvas.height - 30;
       values.forEach((v, i) => {
         const barH = (v / max) * h;
         ctx.fillStyle = '#4a90e2';
@@ -1108,7 +1176,7 @@
         ctx.fillStyle = '#8b95a5';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(labels[i] || '', i * w + w / 2, canvas.height - 4);
+        ctx.fillText(labels[i] || '', i * w + w / 2, canvas.height - 10);
       });
     }
 
@@ -1214,6 +1282,9 @@
       document.getElementById('tab-' + name).classList.add('active');
       document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
       if (btn) btn.classList.add('active');
+      if (name === 'stats') {
+        setTimeout(() => renderBarChart(STATE.stats.days_labels || [], STATE.stats.days_hours || []), 100);
+      }
     }
 
     // Свет — отдельный обработчик
@@ -1223,6 +1294,11 @@
     applyI18n();
     loadState();
     setInterval(loadState, 5000);
+    window.addEventListener('resize', () => {
+      if (STATE && STATE.stats) {
+        renderBarChart(STATE.stats.days_labels || [], STATE.stats.days_hours || []);
+      }
+    });
   </script>
 </body>
 </html>
