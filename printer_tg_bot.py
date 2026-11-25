@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 # ==================== STATE CACHE ====================
 state_lock = threading.Lock()
@@ -457,6 +457,15 @@ def get_main_kb():
         "inline_keyboard": [
             [{"text": t("menu_status"), "callback_data": "btn_status"}, {"text": t("menu_stats"), "callback_data": "btn_stats"}],
             [{"text": t("menu_spools"), "callback_data": "btn_spools"}, {"text": t("menu_cons"), "callback_data": "btn_cons"}],
+            [{"text": t("menu_maint"), "callback_data": "btn_maint"}]
+        ]
+    }
+
+def get_welcome_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": t("menu_status"), "callback_data": "btn_status"}, {"text": t("menu_stats"), "callback_data": "btn_stats"}],
+            [{"text": t("menu_spools"), "callback_data": "btn_spools"}, {"text": t("menu_cons"), "callback_data": "btn_cons"}],
             [{"text": t("menu_maint"), "callback_data": "btn_maint"}],
             [{"text": t("language_en"), "callback_data": "lang_en"}, {"text": t("language_ru"), "callback_data": "lang_ru"}]
         ]
@@ -482,16 +491,9 @@ def get_reset_kb():
     }
 
 MAIN_KB = get_main_kb()
+WELCOME_KB = get_welcome_kb()
 MAINT_KB = get_maint_kb()
 RESET_KB = get_reset_kb()
-
-last_state = None
-last_fname = ""
-last_update_id = 0
-awaiting_spool = False
-edit_spool_id = None
-print_start_files = set()
-last_cam_fail_ts = 0.0
 
 # ==================== 3. TELEGRAM API ====================
 def tg_api(method, payload, timeout=15):
@@ -1451,7 +1453,7 @@ def _handle_update(item):
             st["settings"] = s
             save_state(st)
             tg_answer_cb(cb_id, "Language switched to English")
-            out(t("panel_title"), get_main_kb())
+            out(t("panel_title"), MAIN_KB)
             return
         elif data == "lang_ru":
             st = load_state()
@@ -1460,7 +1462,7 @@ def _handle_update(item):
             st["settings"] = s
             save_state(st)
             tg_answer_cb(cb_id, "Язык изменён на русский")
-            out(t("panel_title"), get_main_kb())
+            out(t("panel_title"), MAIN_KB)
             return        
         elif data == "btn_status":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); send_usb_photo(format_status(), MAIN_KB)
@@ -2066,7 +2068,7 @@ if migrate_state(_st):
     log.info("Состояние мигрировано на новую схему")
 
 mode_str = "CFS (4 слота)" if HAS_CFS else "Одиночная катушка"
-tg_send("✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>" % (VERSION, mode_str), MAIN_KB)
+tg_send("✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>" % (VERSION, mode_str), WELCOME_KB)
 
 threading.Thread(target=check_commands, daemon=True).start()
 
