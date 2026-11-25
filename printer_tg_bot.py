@@ -1,99 +1,93 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import json, os, sys, time, uuid, threading, urllib.request, urllib.parse, logging, configparser, re
-import hmac, hashlib, subprocess, py_compile
+import json, os, sys, time, uuid, threading, urllib.request, urllib.parse, logging, configparser, py_compile, fcntl
+import hmac, hashlib, subprocess, re
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
-# ==================== 1. CONFIGURATION ====================
+# ==================== 1. КОНФИГУРАЦИЯ ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 SECRETS_FILE = os.path.join(BASE_DIR, "secrets.ini")
 STATE_FILE = os.path.join(BASE_DIR, "printer_state.json")
 
-config = configparser.ConfigParser()
-config.read([CONFIG_FILE, SECRETS_FILE], encoding="utf-8")
-
-TOKEN = config.get("telegram", "token", fallback="").strip()
-CHAT_ID = config.get("telegram", "chat_id", fallback="").strip()
-MOONRAKER = config.get("printer", "moonraker_url", fallback="http://localhost:7125").rstrip("/")
-POLL_INTERVAL = config.getint("printer", "poll_interval", fallback=5)
-TIMEZONE_OFFSET = config.getint("printer", "timezone_offset", fallback=7)
-DIGEST_HOUR = config.getint("printer", "digest_hour", fallback=20)
-
-MAINT_INTERVAL_HOURS = config.getint("maintenance", "maint_interval_hours", fallback=150)
-NOZZLE_LIMIT_METERS = config.getint("maintenance", "nozzle_limit_meters", fallback=1000)
-FILTER_LIMIT_HOURS = config.getint("maintenance", "filter_limit_hours", fallback=500)
-PTFE_LIMIT_METERS = config.getint("maintenance", "ptfe_limit_meters", fallback=2500)
-CUTTER_LIMIT_CUTS = config.getint("maintenance", "cutter_limit_cuts", fallback=5000)
-CFS_HUMIDITY_LIMIT = config.getint("maintenance", "cfs_humidity_limit", fallback=25)
-
-FILAMENT_PRICE_KG = config.getfloat("costs", "filament_price_default", fallback=1200)
-ELEC_PRICE_KWH = config.getfloat("costs", "elec_price_kwh", fallback=5.43)
-PRINTER_POWER_KW = config.getfloat("costs", "printer_power_kw", fallback=0.25)
-DEPRECIATION_PER_HOUR = config.getfloat("costs", "depreciation_per_hour", fallback=10)
-
-USE_CLOUDFLARED = config.getboolean("advanced", "use_cloudflared", fallback=True)
-WEBAPP_PORT = config.getint("advanced", "webapp_port", fallback=8088)
-GITHUB_RAW_BASE = config.get("advanced", "github_raw_base", fallback="").rstrip("/")
-
+TOKEN = ""
+CHAT_ID = "210754903"
+MOONRAKER = "http://localhost:7125"
+POLL_INTERVAL = 5
+TIMEZONE_OFFSET = 7
+DIGEST_HOUR = 20
+MAINT_INTERVAL_HOURS = 150
+NOZZLE_LIMIT_METERS = 1000
+FILTER_LIMIT_HOURS = 500
+PTFE_LIMIT_METERS = 2500
+CUTTER_LIMIT_CUTS = 5000
+CFS_HUMIDITY_LIMIT = 25
+FILAMENT_PRICE_KG = 1200
 FILAMENT_PRICE_BY_TYPE = {
     "PLA": 1200, "PETG": 1000, "ABS": 1100, "ASA": 1300, "TPU": 1650,
     "PC": 2200, "NYLON": 2500, "PA": 2500, "PA-CF": 3200, "HIPS": 1150,
 }
+ELEC_PRICE_KWH = 5.43
+PRINTER_POWER_KW = 0.25
+DEPRECIATION_PER_HOUR = 10
 G_PER_M_DEFAULT = 2.98
 M_PER_SPOOL = 335.0
 DENSITY_G_PER_M = {
     "PLA": 2.98, "PETG": 3.06, "ABS": 2.53, "ASA": 2.60, "TPU": 2.90,
     "PC": 2.98, "NYLON": 2.95, "PA": 2.95, "PA-CF": 2.70, "HIPS": 2.55,
 }
-
 CUSTOM_CAM_URL = ""
 CUSTOM_GCODES_DIR = ""
 CUSTOM_TIMELAPSE_DIR = ""
+USE_CLOUDFLARED = True
+WEBAPP_PORT = 8088
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
+
+if os.path.exists(SECRETS_FILE) or os.path.exists(CONFIG_FILE):
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    config.read(SECRETS_FILE)
+    if config.has_option("telegram", "token"): TOKEN = config.get("telegram", "token")
+    if config.has_option("telegram", "chat_id"): CHAT_ID = config.get("telegram", "chat_id")
+    if config.has_option("printer", "moonraker_url"): MOONRAKER = config.get("printer", "moonraker_url")
+    if config.has_option("printer", "poll_interval"): POLL_INTERVAL = config.getint("printer", "poll_interval")
+    if config.has_option("printer", "timezone_offset"): TIMEZONE_OFFSET = config.getint("printer", "timezone_offset")
+    if config.has_option("printer", "digest_hour"): DIGEST_HOUR = config.getint("printer", "digest_hour")
+    if config.has_option("maintenance", "maint_interval_hours"): MAINT_INTERVAL_HOURS = config.getint("maintenance", "maint_interval_hours")
+    if config.has_option("maintenance", "nozzle_limit_meters"): NOZZLE_LIMIT_METERS = config.getint("maintenance", "nozzle_limit_meters")
+    if config.has_option("maintenance", "filter_limit_hours"): FILTER_LIMIT_HOURS = config.getint("maintenance", "filter_limit_hours")
+    if config.has_option("maintenance", "ptfe_limit_meters"): PTFE_LIMIT_METERS = config.getint("maintenance", "ptfe_limit_meters")
+    if config.has_option("maintenance", "cutter_limit_cuts"): CUTTER_LIMIT_CUTS = config.getint("maintenance", "cutter_limit_cuts")
+    if config.has_option("maintenance", "cfs_humidity_limit"): CFS_HUMIDITY_LIMIT = config.getint("maintenance", "cfs_humidity_limit")
+    if config.has_option("costs", "filament_price_default"): FILAMENT_PRICE_KG = config.getfloat("costs", "filament_price_default")
+    if config.has_option("costs", "elec_price_kwh"): ELEC_PRICE_KWH = config.getfloat("costs", "elec_price_kwh")
+    if config.has_option("costs", "printer_power_kw"): PRINTER_POWER_KW = config.getfloat("costs", "printer_power_kw")
+    if config.has_option("costs", "depreciation_per_hour"): DEPRECIATION_PER_HOUR = config.getfloat("costs", "depreciation_per_hour")
+    if config.has_option("advanced", "use_cloudflared"): USE_CLOUDFLARED = config.getboolean("advanced", "use_cloudflared")
+    if config.has_option("advanced", "webapp_port"): WEBAPP_PORT = config.getint("advanced", "webapp_port")
+    if config.has_option("advanced", "github_raw_base"): GITHUB_RAW_BASE = config.get("advanced", "github_raw_base").rstrip("/")
+
+GCODES_DIR = ""
+TIMELAPSE_DIR = ""
+CAM_SNAPSHOT_URL = ""
+HAS_CFS = False
 
 log = logging.getLogger("printer_tg_bot")
 log.setLevel(logging.INFO)
-handler = RotatingFileHandler(os.path.join(BASE_DIR, "printer_tg_bot.log"), maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
-handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-log.addHandler(handler)
+_handler = RotatingFileHandler(os.path.join(BASE_DIR, "printer_tg_bot.log"), maxBytes=5*1024*1024, backupCount=3)
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+log.addHandler(_handler)
 
-# ==================== 2. STATE CACHE (RAM) ====================
-_state_cache = None
-_state_lock = threading.RLock()
+if not TOKEN or not CHAT_ID:
+    log.critical("ERROR: token or chat_id missing! Check secrets.ini")
+    print("ERROR: token or chat_id missing! Check secrets.ini")
+    sys.exit(1)
 
-def load_state():
-    global _state_cache
-    with _state_lock:
-        if _state_cache is None:
-            if os.path.exists(STATE_FILE):
-                try:
-                    with open(STATE_FILE, "r", encoding="utf-8") as f:
-                        _state_cache = json.load(f)
-                except Exception:
-                    _state_cache = {}
-            else:
-                _state_cache = {}
-        return _state_cache
-
-def save_state(data=None):
-    global _state_cache
-    with _state_lock:
-        if data is not None:
-            _state_cache = data
-        if _state_cache is not None:
-            try:
-                tmp = STATE_FILE + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(_state_cache, f, ensure_ascii=False, indent=2)
-                os.replace(tmp, STATE_FILE)
-            except Exception as e:
-                log.warning("Ошибка записи состояния: %s", e)
-
-# ==================== 3. TELEGRAM KEYBOARDS ====================
+# ==================== 2. МЕНЮ TELEGRAM ====================
 MAIN_KB = {
     "inline_keyboard": [
         [{"text": "📊 Статус", "callback_data": "btn_status"}, {"text": "📈 Статистика", "callback_data": "btn_stats"}],
@@ -117,11 +111,6 @@ RESET_KB = {
     ]
 }
 
-GCODES_DIR = ""
-TIMELAPSE_DIR = ""
-CAM_SNAPSHOT_URL = ""
-HAS_CFS = False
-
 last_state = None
 last_fname = ""
 last_update_id = 0
@@ -129,33 +118,19 @@ awaiting_spool = False
 edit_spool_id = None
 print_start_files = set()
 last_cam_fail_ts = 0.0
-# ==================== 4. TELEGRAM API ====================
-def tg_api(method, payload, timeout=15):
-    if not TOKEN:
-        return {}
-    url = "https://telegram.org" + str(TOKEN) + "/" + str(method)
-    p = dict(payload)
-    if "reply_markup" in p and p["reply_markup"] and not isinstance(p["reply_markup"], str):
-        p["reply_markup"] = json.dumps(p["reply_markup"])
-    data = urllib.parse.urlencode(p).encode()
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except Exception as e:
-            err_s = str(e).lower()
-            if ("name or service not known" in err_s or "temporary failure" in err_s) and os.access("/etc/resolv.conf", os.W_OK):
-                try:
-                    with open("/etc/resolv.conf", "r+") as rf:
-                        txt = rf.read()
-                        if "8.8.8.8" not in txt:
-                            rf.write("\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n")
-                except Exception:
-                    pass
-            log.warning("TG %s err (try %d): %s", method, attempt + 1, e)
-            time.sleep(2)
-    return {}
 
+# ==================== 3. TELEGRAM API ====================
+def tg_api(method, payload, timeout=15):
+    url = "https://api.telegram.org/bot%s/%s" % (TOKEN, method)
+    if "reply_markup" in payload and payload["reply_markup"]:
+        payload["reply_markup"] = json.dumps(payload["reply_markup"])
+    data = urllib.parse.urlencode(payload).encode()
+    try:
+        with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:
+        log.warning("Telegram API error (%s): %s", method, e)
+        return {}
 
 def tg_send(text, kb=None):
     p = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -181,7 +156,7 @@ def tg_answer_cb(cb_id, text=""):
 def tg_send_media(is_video, file_bytes, filename, mime, caption, kb=None, timeout=30):
     method = "sendVideo" if is_video else "sendPhoto"
     field = "video" if is_video else "photo"
-    url = "https://telegram.org" % (TOKEN, method)
+    url = "https://api.telegram.org/bot%s/%s" % (TOKEN, method)
     bnd = uuid.uuid4().hex
     parts = [
         ("--" + bnd).encode(), b'Content-Disposition: form-data; name="chat_id"', b"", str(CHAT_ID).encode(),
@@ -238,19 +213,16 @@ def send_thumbnail(meta, caption, kb=None):
                 pass
     tg_send(caption, kb)
 
-def _timelapse_worker(caption, kb, exclude_files, job_end_ts):
-    global TIMELAPSE_DIR
+def _timelapse_worker(caption, kb, exclude_files):
     try:
-        if not TIMELAPSE_DIR or not os.path.isdir(TIMELAPSE_DIR):
-            detect_environment()
         if TIMELAPSE_DIR and os.path.isdir(TIMELAPSE_DIR):
             start_wait, video_path, last_size = time.time(), None, -1
-            while time.time() - start_wait < 90:
+            while time.time() - start_wait < 120:
                 all_mp4 = [f for f in os.listdir(TIMELAPSE_DIR) if f.endswith(".mp4")]
                 if exclude_files:
                     cur_files = [f for f in all_mp4 if f not in exclude_files]
                 else:
-                    cur_files = [f for f in all_mp4 if os.path.getmtime(os.path.join(TIMELAPSE_DIR, f)) >= (job_end_ts - 300)]
+                    cur_files = [f for f in all_mp4 if time.time() - os.path.getmtime(os.path.join(TIMELAPSE_DIR, f)) < 900]
                 if cur_files:
                     cur_files.sort(key=lambda x: os.path.getmtime(os.path.join(TIMELAPSE_DIR, x)), reverse=True)
                     cand = os.path.join(TIMELAPSE_DIR, cur_files.pop(0))
@@ -276,8 +248,9 @@ def send_timelapse_async(caption, kb=None):
     global print_start_files
     exclude_files = set(print_start_files)
     print_start_files.clear()
-    threading.Thread(target=_timelapse_worker, args=(caption, kb, exclude_files, time.time()), daemon=True).start()
-# ==================== 5. MOONRAKER API & AUTO-DISCOVERY ====================
+    threading.Thread(target=_timelapse_worker, args=(caption, kb, exclude_files), daemon=True).start()
+
+# ==================== 4. MOONRAKER API ====================
 def moonraker_get(path, timeout=8):
     try:
         with urllib.request.urlopen(MOONRAKER + path, timeout=timeout) as r:
@@ -396,7 +369,10 @@ def get_history_list(limit=500):
     return moonraker_get("/server/history/list?limit=%d" % limit, 8).get("jobs", [])
 
 def density_for(meta, fname=""):
-    types = detect_material_types(meta, fname)
+    try:
+        types = detect_material_types(meta, fname)
+    except Exception:
+        types = ["PLA"]
     return sum(DENSITY_G_PER_M.get(t, G_PER_M_DEFAULT) for t in types) / max(1, len(types))
 
 def get_flush_weight(meta):
@@ -407,8 +383,11 @@ def get_flush_weight(meta):
     return fg
 
 def price_for(meta, fname=""):
-    types = detect_material_types(meta, fname)
-    return sum(cfg_price(t) for t in types) / max(1, len(types))
+    try:
+        types = detect_material_types(meta, fname)
+    except Exception:
+        types = ["PLA"]
+    return sum(FILAMENT_PRICE_BY_TYPE.get(t, FILAMENT_PRICE_KG) for t in types) / max(1, len(types))
 
 def calc_costs(meta, duration_sec=0, used_mm=0):
     dens = density_for(meta)
@@ -421,11 +400,30 @@ def calc_costs(meta, duration_sec=0, used_mm=0):
         lmm = meta.get("filament_total", 0) or 0
         if lmm > 0: w = (lmm / 1000.0) * dens
     h = duration_sec / 3600.0
-    elec = h * float(cfg("power_kw")) * float(cfg("elec_price"))
+    elec = h * PRINTER_POWER_KW * ELEC_PRICE_KWH
     direct = (w / 1000.0) * price_kg + elec
-    depr = h * float(cfg("depr_hour"))
+    depr = h * DEPRECIATION_PER_HOUR
     return w, direct, direct + depr, elec, depr
-# ==================== 6. SPOOL & CFS INVENTORY ====================
+
+# ==================== 5. УЧЕТ КАТУШЕК ====================
+state_lock = threading.Lock()
+
+def load_state():
+    with state_lock:
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r") as f: return json.load(f)
+            except Exception: pass
+        return {}
+
+def save_state(data):
+    with state_lock:
+        try:
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w") as f: json.dump(data, f)
+            os.replace(tmp, STATE_FILE)
+        except Exception: pass
+
 def cfg(key):
     st = load_state()
     s = st.get("settings") or {}
@@ -456,28 +454,28 @@ def cfg_price(mat):
 COLOR_PALETTE = (
     ((228, 238, 155), "Светло-желтый", "Желтый"),
     ((252, 130, 115), "Коралловый", "Розовый"),
-    ((15, 105, 250),  "Синий", "Синий"),
-    ((85, 235, 95),   "Салатовый", "Салатовый"),
-    ((240, 125, 40),  "Оранжевый", "Оранжевый"),
-    ((255, 20, 15),   "Красный", "Красный"),
+    ((15, 105, 250), "Синий", "Синий"),
+    ((85, 235, 95), "Салатовый", "Салатовый"),
+    ((240, 125, 40), "Оранжевый", "Оранжевый"),
+    ((255, 20, 15), "Красный", "Красный"),
     ((245, 245, 245), "Белый", "Белый"),
     ((195, 210, 225), "Серый", "Серый"),
-    ((155, 65, 240),  "Фиолетовый", "Фиолетовый"),
-    ((10, 195, 255),  "Голубой", "Голубой"),
-    ((15, 235, 210),  "Бирюзовый", "Бирюзовый"),
+    ((155, 65, 240), "Фиолетовый", "Фиолетовый"),
+    ((10, 195, 255), "Голубой", "Голубой"),
+    ((15, 235, 210), "Бирюзовый", "Бирюзовый"),
     ((245, 190, 235), "Светло-розовый", "Розовый"),
-    ((255, 165, 10),  "Оранжевый", "Оранжевый"),
-    ((15, 30, 235),   "Темно-синий", "Синий"),
-    ((22, 24, 30),    "Черный", "Черный"),
+    ((255, 165, 10), "Оранжевый", "Оранжевый"),
+    ((15, 30, 235), "Темно-синий", "Синий"),
+    ((22, 24, 30), "Черный", "Черный"),
     ((110, 175, 240), "Голубой", "Голубой"),
-    ((25, 145, 250),  "Синий", "Синий"),
-    ((65, 185, 45),   "Зеленый", "Зеленый"),
-    ((10, 235, 115),  "Зеленый", "Зеленый"),
-    ((240, 55, 235),  "Розовый", "Розовый"),
-    ((235, 245, 20),  "Желтый", "Желтый"),
+    ((25, 145, 250), "Синий", "Синий"),
+    ((65, 185, 45), "Зеленый", "Зеленый"),
+    ((10, 235, 115), "Зеленый", "Зеленый"),
+    ((240, 55, 235), "Розовый", "Розовый"),
+    ((235, 245, 20), "Желтый", "Желтый"),
     ((205, 195, 245), "Сиреневый", "Фиолетовый"),
-    ((65, 35, 245),   "Фиолетовый", "Фиолетовый"),
-    ((250, 205, 15),  "Желтый", "Желтый"),
+    ((65, 35, 245), "Фиолетовый", "Фиолетовый"),
+    ((250, 205, 15), "Желтый", "Желтый"),
 )
 
 def _nearest_palette(raw_hex):
@@ -570,7 +568,7 @@ def get_used_slots(filename, meta, slots, active_let, total_w=0):
     letters = ("A", "B", "C", "D")
     if len(weights) > 1 and sum(weights) > 0:
         for idx, wg in enumerate(weights):
-            if wg > 0.005 and idx < 4 and letters[idx] in slots:
+            if wg > 0.05 and idx < 4 and letters[idx] in slots:
                 used.append((letters[idx], wg))
     if not used and active_let in slots:
         used.append((active_let, total_w))
@@ -581,51 +579,50 @@ def check_cfs_humidity():
     try:
         _, _, temp, hum = get_cfs_slots()
         hum_val = int(float(str(hum)))
-        if hum_val > int(cfg("cfs_humidity")):
+        if hum_val > CFS_HUMIDITY_LIMIT:
             st = load_state()
             if time.time() - st.get("last_hum_warn_ts", 0) >= 86400:
                 st["last_hum_warn_ts"] = time.time()
                 save_state(st)
-                tg_send("💧 <b>Повышенная влажность в CFS: %d%%</b>\nТемп. %s°C\nПора заменить силикагель или включить сушку." % (hum_val, temp), MAIN_KB)
+                tg_send("💧 <b>Повышенная влажность в CFS: %d%%</b> (темп. %s°C)\nПора заменить силикагель или включить сушку филамента." % (hum_val, temp), MAIN_KB)
     except Exception:
         pass
 
 def resolve_slot_spool(st, letter, mat="PLA", hx="000000", auto_create=True):
-    with _state_lock:
-        spools = st.get("spools") or []
-        if letter == "SINGLE":
-            cur_id = st.get("single_spool_id")
-            sp = next((s for s in spools if s.get("id") == cur_id and s.get("rem_g", 0) > 0), None)
-            if sp: return sp
-            avail = [s for s in spools if s.get("rem_g", 0) > 0]
-            if avail:
-                avail.sort(key=lambda x: x.get("id", 0))
-                st["single_spool_id"] = avail.pop(0)["id"]
-                save_state(st)
-                return next((s for s in spools if s.get("id") == st["single_spool_id"]), None)
-            return None
-        ov_map = st.get("slot_overrides") or {}
-        ov = ov_map.get(letter)
-        if ov:
-            if ov.get("hex") == hx and ov.get("mat") == mat:
-                sp = next((s for s in spools if s.get("id") == ov.get("id") and s.get("rem_g", 0) > 0), None)
-                if sp: return sp
-            del ov_map[letter]
-            st["slot_overrides"] = ov_map
+    spools = st.get("spools") or []
+    if letter == "SINGLE":
+        cur_id = st.get("single_spool_id")
+        sp = next((s for s in spools if s.get("id") == cur_id and s.get("rem_g", 0) > 0), None)
+        if sp: return sp
+        avail = [s for s in spools if s.get("rem_g", 0) > 0]
+        if avail:
+            avail.sort(key=lambda x: x.get("id", 0))
+            st["single_spool_id"] = avail.pop(0)["id"]
             save_state(st)
-        exact = hex_to_ru_name(hx)
-        grp = normalize_color_group(hx)
-        matches = [s for s in spools if s.get("mat") == mat and normalize_color_group(s.get("group") or s.get("name") or s.get("hex")) == grp and s.get("rem_g", 0) > 0]
-        if matches:
-            matches.sort(key=lambda x: (0 if exact.lower() in str(x.get("name") or "").lower() else 1, x.get("id", 0)))
-            return matches.pop(0)
-        if not auto_create: return None
-        next_id = max([s.get("id", 0) for s in spools], default=0) + 1
-        new_sp = {"id": next_id, "mat": mat, "name": exact, "group": grp, "hex": hx, "rem_g": 1000.0}
-        spools.append(new_sp)
-        st["spools"] = spools
+            return next((s for s in spools if s.get("id") == st["single_spool_id"]), None)
+        return None
+    ov_map = st.get("slot_overrides") or {}
+    ov = ov_map.get(letter)
+    if ov:
+        if ov.get("hex") == hx and ov.get("mat") == mat:
+            sp = next((s for s in spools if s.get("id") == ov.get("id") and s.get("rem_g", 0) > 0), None)
+            if sp: return sp
+        del ov_map[letter]
+        st["slot_overrides"] = ov_map
         save_state(st)
-        return new_sp
+    exact = hex_to_ru_name(hx)
+    grp = normalize_color_group(hx)
+    matches = [s for s in spools if s.get("mat") == mat and normalize_color_group(s.get("group") or s.get("name") or s.get("hex")) == grp and s.get("rem_g", 0) > 0]
+    if matches:
+        matches.sort(key=lambda x: (0 if exact.lower() in str(x.get("name") or "").lower() else 1, x.get("id", 0)))
+        return matches.pop(0)
+    if not auto_create: return None
+    next_id = max([s.get("id", 0) for s in spools], default=0) + 1
+    new_sp = {"id": next_id, "mat": mat, "name": exact, "group": grp, "hex": hx, "rem_g": 1000.0}
+    spools.append(new_sp)
+    st["spools"] = spools
+    save_state(st)
+    return new_sp
 
 def deduct_spool_weight(filename, meta, weight_g):
     if weight_g <= 0 or not cfg("spool_tracking"): return ""
@@ -635,22 +632,21 @@ def deduct_spool_weight(filename, meta, weight_g):
     raw_sum = sum(g for _, g in used)
     scale = (weight_g / raw_sum) if raw_sum > 0 else 1.0
     notes = []
-    with _state_lock:
-        for let, part_g in used:
-            slot = slots.get(let) or {"mat": "PLA", "hex": "000000"}
-            left_to_sub = part_g * scale
-            while left_to_sub > 0.005:
-                sp = resolve_slot_spool(st, let, slot["mat"], slot["hex"], auto_create=HAS_CFS)
-                if not sp: break
-                take = min(sp["rem_g"], left_to_sub)
-                sp["rem_g"] = round(max(0.0, sp["rem_g"] - take), 1)
-                left_to_sub -= take
-                notes.append("%s: осталось <b>%.0f г</b>" % (sp_title(sp), sp["rem_g"]))
-        ov_map = st.get("slot_overrides") or {}
-        for let, _ in used:
-            ov_map.pop(let, None)
-        st["slot_overrides"] = ov_map
-        save_state(st)
+    for let, part_g in used:
+        slot = slots.get(let) or {"mat": "PLA", "hex": "000000"}
+        left_to_sub = part_g * scale
+        while left_to_sub > 0.1:
+            sp = resolve_slot_spool(st, let, slot["mat"], slot["hex"], auto_create=HAS_CFS)
+            if not sp: break
+            take = min(sp["rem_g"], left_to_sub)
+            sp["rem_g"] = round(max(0.0, sp["rem_g"] - take), 1)
+            left_to_sub -= take
+            notes.append("%s: осталось <b>%.0f г</b>" % (sp_title(sp), sp["rem_g"]))
+    ov_map = st.get("slot_overrides") or {}
+    for let, _ in used:
+        ov_map.pop(let, None)
+    st["slot_overrides"] = ov_map
+    save_state(st)
     return "\n".join("• Катушка " + n for n in notes)
 
 def build_spools_view():
@@ -723,7 +719,8 @@ def build_spool_picker(prefix, back_cb, page=0, pref_mat=None):
         rows.append(nav)
     rows.append([{"text": "⬅️ Назад", "callback_data": back_cb}])
     return {"inline_keyboard": rows}
-# ==================== 7. COUNTERS & CONSUMABLES ====================
+
+# ==================== 6. СЧЕТЧИКИ РАСХОДНИКОВ ====================
 def detect_material_types(meta, fname=""):
     raw = str(meta.get("filament_type", "") or "").strip().upper()
     if raw:
@@ -759,19 +756,18 @@ def record_waste(weight_g, direct_rub):
 def update_and_check_counters(total_hours, total_meters, add_cuts=0):
     st = load_state()
     changed = False
-    m_int = float(cfg("maint_hours"))
     last_m = st.get("last_maint_hours", 0)
-    if last_m == 0 and total_hours >= m_int:
-        st["last_maint_hours"] = (int(total_hours) // int(m_int)) * int(m_int)
+    if last_m == 0 and total_hours >= MAINT_INTERVAL_HOURS:
+        st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
         changed = True
-    elif total_hours - last_m >= m_int:
-        st["last_maint_hours"] = (int(total_hours) // int(m_int)) * int(m_int)
+    elif total_hours - last_m >= MAINT_INTERVAL_HOURS:
+        st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
         changed = True
         tg_send("🛠 <b>Пора провести ТО принтера!</b>\nНаработка: <b>%.1f ч</b>\nОчистите и смажьте направляющие/винты, проверьте ремни." % total_hours, MAIN_KB)
     checks = [
-        ("nozzle_start_meters", "nozzle_warned", total_meters, float(cfg("nozzle_meters")), "⚠️ <b>Ресурс сопла выработан!</b>\nПробег: <b>%.1f / %.0f м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
-        ("filter_start_hours", "filter_warned", total_hours, float(cfg("filter_hours")), "🌬 <b>Пора заменить фильтр воздуха!</b>\nНаработка фильтра: <b>%.1f / %.0f ч</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
-        ("ptfe_start_meters", "ptfe_warned", total_meters, float(cfg("ptfe_meters")), "➰ <b>Проверьте PTFE-трубку!</b>\nПробег филамента через трубку: <b>%.1f / %.0f м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.")
+        ("nozzle_start_meters", "nozzle_warned", total_meters, NOZZLE_LIMIT_METERS, "⚠️ <b>Ресурс сопла выработан!</b>\nПробег: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
+        ("filter_start_hours", "filter_warned", total_hours, FILTER_LIMIT_HOURS, "🌬 <b>Пора заменить фильтр воздуха!</b>\nНаработка фильтра: <b>%.1f / %d ч</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
+        ("ptfe_start_meters", "ptfe_warned", total_meters, PTFE_LIMIT_METERS, "➰ <b>Проверьте PTFE-трубку!</b>\nПробег филамента через трубку: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.")
     ]
     for start_k, warn_k, cur_val, limit_val, msg_tpl in checks:
         if start_k not in st:
@@ -784,10 +780,9 @@ def update_and_check_counters(total_hours, total_meters, add_cuts=0):
     if add_cuts > 0:
         st["cutter_cuts"], changed = st.get("cutter_cuts", 0) + add_cuts, True
         cuts = st.get("cutter_cuts", 0)
-        c_lim = int(cfg("cutter_cuts"))
-        if cuts >= c_lim and not st.get("cutter_warned", False):
+        if cuts >= CUTTER_LIMIT_CUTS and not st.get("cutter_warned", False):
             st["cutter_warned"], changed = True, True
-            tg_send("✂️ <b>Пора проверить лезвие резака филамента!</b>\nВыполнено резов: <b>%d / %d</b>.\nПосле замены сбросьте счетчик в меню Обслуживание." % (cuts, c_lim), MAIN_KB)
+            tg_send("✂️ <b>Пора проверить лезвие резака филамента!</b>\nВыполнено резов: <b>%d / %d</b>.\nПосле замены сбросьте счетчик в меню Обслуживание." % (cuts, CUTTER_LIMIT_CUTS), MAIN_KB)
     if changed:
         save_state(st)
 
@@ -798,7 +793,8 @@ def update_counters(cuts=0):
             totals.get("total_time", 0) / 3600.0,
             totals.get("total_filament_used", 0) / 1000.0,
             cuts)
-# ==================== 8. REPORTS & DIGEST ====================
+
+# ==================== 7. ОТЧЕТЫ ====================
 def analyze_history(history):
     now_ts = time.time()
     sec_7d, sec_30d, mm_7d, jobs_7d, ok_7d, ok_all = 0.0, 0.0, 0.0, 0, 0, 0
@@ -828,15 +824,15 @@ def format_consumables():
     return (
         "🔩 <b>Ресурс расходников и ТО:</b>\n"
         "• До планового ТО: <b>~%.1f ч</b>\n"
-        "• Сопло: <b>%.1f / %.0f м</b>\n"
-        "• Фильтр: <b>%.1f / %.0f ч</b>\n"
-        "• PTFE-трубка: <b>%.1f / %.0f м</b>\n"
+        "• Сопло: <b>%.1f / %d м</b>\n"
+        "• Фильтр: <b>%.1f / %d ч</b>\n"
+        "• PTFE-трубка: <b>%.1f / %d м</b>\n"
         "• Нож резака: <b>%d / %d резов</b>" % (
-            max(0.0, (st.get("last_maint_hours", 0) + float(cfg("maint_hours"))) - h),
-            max(0.0, m - st.get("nozzle_start_meters", m)), float(cfg("nozzle_meters")),
-            max(0.0, h - st.get("filter_start_hours", h)), float(cfg("filter_hours")),
-            max(0.0, m - st.get("ptfe_start_meters", m)), float(cfg("ptfe_meters")),
-            st.get("cutter_cuts", 0), int(cfg("cutter_cuts"))
+            max(0.0, (st.get("last_maint_hours", 0) + MAINT_INTERVAL_HOURS) - h),
+            max(0.0, m - st.get("nozzle_start_meters", m)), NOZZLE_LIMIT_METERS,
+            max(0.0, h - st.get("filter_start_hours", h)), FILTER_LIMIT_HOURS,
+            max(0.0, m - st.get("ptfe_start_meters", m)), PTFE_LIMIT_METERS,
+            st.get("cutter_cuts", 0), CUTTER_LIMIT_CUTS
         )
     )
 
@@ -846,20 +842,13 @@ def format_stats():
     h, m = totals.get("total_time", 0) / 3600.0, totals.get("total_filament_used", 0) / 1000.0
     jobs, longest_h = totals.get("total_jobs", 0), totals.get("longest_print", 0) / 3600.0
     total_g = m * G_PER_M_DEFAULT
-    st = load_state()
-    mats = st.get("materials_meters", {})
-    if mats:
-        fil_rub = sum(((meters * DENSITY_G_PER_M.get(t, G_PER_M_DEFAULT)) / 1000.0) * cfg_price(t) for t, meters in mats.items())
-        tr_m = sum(mats.values())
-        if m > tr_m: fil_rub += (((m - tr_m) * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default"))
-    else:
-        fil_rub = (total_g / 1000.0) * float(cfg("price_default"))
-    elec = h * float(cfg("power_kw")) * float(cfg("elec_price"))
-    direct = fil_rub + elec
-    depr = h * float(cfg("depr_hour"))
-    history = get_history_list(300)
+    elec = h * PRINTER_POWER_KW * ELEC_PRICE_KWH
+    direct = (total_g / 1000.0) * FILAMENT_PRICE_KG + elec
+    depr = h * DEPRECIATION_PER_HOUR
+    history = get_history_list(500)
     h_7d, h_30d, _, _, _, ok_all, _ = analyze_history(history)
     hist_len = len(history)
+    st = load_state()
     waste_g, waste_rub = st.get("waste_g", 0.0), st.get("waste_rub", 0.0)
     lines = [
         "📈 <b>Общая статистика принтера:</b>",
@@ -880,6 +869,7 @@ def format_stats():
         "• За 7 дней: <b>%.1f ч</b> (~%.1f ч/день | КПД %.0f%%)" % (h_7d, h_7d / 7.0, min(100.0, h_7d * 100.0 / 168.0)),
         "• За 30 дней: <b>%.1f ч</b> (~%.1f ч/день | КПД %.0f%%)" % (h_30d, h_30d / 30.0, min(100.0, h_30d * 100.0 / 720.0))
     ])
+    mats = st.get("materials_meters", {})
     if mats:
         lines.extend(["", "🧵 <b>Расход по типам пластика:</b>"])
         for k in sorted(mats, key=mats.get, reverse=True):
@@ -887,26 +877,26 @@ def format_stats():
     lines.extend([
         "",
         "💰 <b>Затраты за всё время:</b>",
-        "• Прямые (пластик %.0f + свет %.0f): <b>~%.0f руб.</b>" % (fil_rub, elec, direct),
+        "• Прямые (пластик+свет): <b>~%.0f руб.</b> (свет ~%.0f руб.)" % (direct, elec),
         "• С учетом амортизации: <b>~%.0f руб.</b> (аморт. ~%.0f руб.)" % (direct + depr, depr)
     ])
     return "\n".join(lines)
 
 def check_weekly_digest():
-    local_now = datetime.now(timezone.utc) + timedelta(hours=int(cfg("timezone_offset")))
-    if local_now.weekday() == 6 and local_now.hour == int(cfg("digest_hour")):
+    local_now = datetime.now(timezone.utc) + timedelta(hours=TIMEZONE_OFFSET)
+    if local_now.weekday() == 6 and local_now.hour == DIGEST_HOUR:
         today_str = local_now.strftime("%Y-%m-%d")
         st = load_state()
         if st.get("last_digest_date") == today_str: return
-        h_7d, _, m_7d, jobs_7d, ok_7d, _, fallback_mats = analyze_history(get_history_list(300))
+        h_7d, _, m_7d, jobs_7d, ok_7d, _, fallback_mats = analyze_history(get_history_list(500))
         week_mats = st.get("week_materials") or fallback_mats
         w_waste_g, w_waste_rub = st.get("week_waste_g", 0.0), st.get("week_waste_rub", 0.0)
         st["last_digest_date"], st["week_materials"] = today_str, {}
         st["week_waste_g"], st["week_waste_rub"] = 0.0, 0.0
         save_state(st)
-        elec = h_7d * float(cfg("power_kw")) * float(cfg("elec_price"))
-        direct = ((m_7d * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default")) + elec
-        full = direct + (h_7d * float(cfg("depr_hour")))
+        elec = h_7d * PRINTER_POWER_KW * ELEC_PRICE_KWH
+        direct = ((m_7d * G_PER_M_DEFAULT) / 1000.0) * FILAMENT_PRICE_KG + elec
+        full = direct + (h_7d * DEPRECIATION_PER_HOUR)
         rel_pct = (ok_7d * 100.0 / jobs_7d) if jobs_7d > 0 else 100.0
         lines = [
             "📅 <b>Еженедельный дайджест принтера:</b>",
@@ -921,7 +911,8 @@ def check_weekly_digest():
             lines.append("• По материалам: <b>%s</b>" % ", ".join(parts))
         lines.append("• Затраты за неделю: <b>~%.0f руб.</b> (свет ~%.0f руб., с аморт. ~%.0f руб.)" % (direct, elec, full))
         tg_send("\n".join(lines), MAIN_KB)
-# ==================== 9. JOB COMPLETION ====================
+
+# ==================== 8. ЗАВЕРШЕНИЕ ПЕЧАТИ ====================
 def process_completed_job(fname, meta, print_dur, used_mm, send_video=True):
     w, direct, full, elec, depr = calc_costs(meta, print_dur, used_mm)
     flush_g = get_flush_weight(meta)
@@ -963,7 +954,7 @@ def handle_missed_job_end(old_fname):
         w, direct, full, _, depr = calc_costs(meta, dur, umm)
         record_waste(w, direct)
         spool_notes = deduct_spool_weight(old_fname, meta, w)
-        update_counters(1 if (HAS_CFS and umm > 0) else 0)
+        update_counters(0)
         lines = ["⏹ <b>Пропущенное завершение печати (статус: %s):</b>" % esc(status or "unknown"),
             "• Файл: <b>%s</b>" % esc(old_fname),
             "• Время печати: <b>%s</b>" % format_dur(dur)]
@@ -974,7 +965,8 @@ def handle_missed_job_end(old_fname):
         tg_send("\n".join(lines), MAIN_KB)
     except Exception:
         log.exception("Ошибка обработки пропущенного завершения")
-# ==================== 10. STATUS & MAINTENANCE ====================
+
+# ==================== 9. СТАТУС И ОБСЛУЖИВАНИЕ ====================
 def format_dur(sec):
     h, m = int(sec // 3600), int((sec % 3600) // 60)
     return "%d ч %d мин" % (h, m) if h > 0 else "%d мин" % m
@@ -997,7 +989,7 @@ def format_status():
     est = get_file_meta(fname).get("estimated_time", 0)
     if est > dur:
         rem = est - dur
-        end_dt = (datetime.now(timezone.utc) + timedelta(hours=int(cfg("timezone_offset")), seconds=rem)).strftime("%d.%m.%Y %H:%M")
+        end_dt = (datetime.now(timezone.utc) + timedelta(hours=TIMEZONE_OFFSET, seconds=rem)).strftime("%d.%m.%Y %H:%M")
         lines.extend(["• Осталось: <b>~%s</b>" % format_dur(rem), "• Окончание: <b>~%s</b>" % end_dt])
     return "\n".join(lines)
 
@@ -1051,18 +1043,25 @@ def _lube_worker(axis):
     except Exception as e:
         log.exception("Ошибка движения оси %s", axis.upper())
         tg_send("⚠️ Ошибка движения оси %s: %s" % (axis.upper(), e), MAINT_KB)
-# ==================== 11. COMMAND HANDLERS ====================
+
+# ==================== 10. ОБРАБОТКА КОМАНД (ОТДЕЛЬНЫЙ ПОТОК) ====================
 def check_commands():
     global last_update_id
-    res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25}, timeout=35).get("result", [])
-    if not isinstance(res, list):
-        return
-    for item in res:
-        last_update_id = item["update_id"]
+    while True:
         try:
-            _handle_update(item)
+            res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25}, timeout=30).get("result", [])
+            if not isinstance(res, list) or not res:
+                time.sleep(5)
+                continue
+            for item in res:
+                last_update_id = item["update_id"]
+                try:
+                    _handle_update(item)
+                except Exception:
+                    log.exception("Ошибка обработки апдейта %s", item.get("update_id"))
         except Exception:
-            log.exception("Ошибка обработки апдейта %s", item.get("update_id"))
+            log.exception("Ошибка в цикле check_commands")
+            time.sleep(5)
 
 def _handle_update(item):
     global awaiting_spool, edit_spool_id
@@ -1105,25 +1104,18 @@ def _handle_update(item):
             rows.append([{"text": "⬅️ Назад", "callback_data": "btn_spools"}])
             out("🔄 <b>Уточнение слота CFS:</b>", {"inline_keyboard": rows})
         elif data.startswith("sp_ovslot_"):
-            parts_ov = data.split("_")
-            let = parts_ov[2]
-            from_start = (len(parts_ov) > 3 and parts_ov[3] == "start")
-            tg_answer_cb(cb_id)
+            let = data.split("_").pop(); tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
-            if not spools:
-                t, kb = build_spools_view(); out(t, kb)
+            if not spools: t, kb = build_spools_view(); out(t, kb)
             else:
                 slots, _, _, _ = get_cfs_slots()
                 p_mat = slots.get(let, {}).get("mat") if let in slots else None
                 title_ov = "📥 <b>Выберите текущую катушку:</b>" if let == "SINGLE" else ("📥 <b>Выберите бобину для Слота %s:</b>" % let)
-                pref = ("sp_ovset_%s_start_" % let) if from_start else ("sp_ovset_%s_" % let)
-                back_cb = "btn_spools" if (let == "SINGLE" or from_start) else "sp_ov_menu"
-                out(title_ov, build_spool_picker(pref, back_cb, 0, p_mat))
+                out(title_ov, build_spool_picker("sp_ovset_%s_" % let, "btn_spools" if let == "SINGLE" else "sp_ov_menu", 0, p_mat))
         elif data.startswith("sp_ovset_"):
-            parts_set = data.split("_")
-            let = parts_set[2]
-            from_start = ("start" in parts_set)
-            sid = int(parts_set[-1])
+            nums = [p for p in data.split("_") if p.isdigit()]
+            let = data.split("_")[2]
+            sid = int(nums.pop())
             st = load_state()
             if let == "SINGLE":
                 st["single_spool_id"] = sid
@@ -1136,9 +1128,7 @@ def _handle_update(item):
                     ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
                     st["slot_overrides"] = ov; save_state(st)
                     tg_answer_cb(cb_id, "✅ Слот %s уточнен" % let)
-            t, kb = build_spools_view(); out(t, kb)
-            if from_start and last_fname:
-                send_job_start_card(last_fname, with_thumb=False)
+                t, kb = build_spools_view(); out(t, kb)
         elif data == "sp_del_menu":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
@@ -1208,8 +1198,9 @@ def _handle_update(item):
     elif txt.startswith("/consumables"): tg_send(format_consumables(), MAIN_KB)
     elif txt.startswith("/status"): send_usb_photo(format_status(), MAIN_KB)
     elif txt.startswith("/spools"): t, kb = build_spools_view(); tg_send(t, kb)
-    elif txt.startswith(("/start", "/help")): awaiting_spool = False; edit_spool_id = None; tg_send("🤖 <b>Панель управления принтером (v%s):</b>" % VERSION, MAIN_KB)
-# ==================== 12. MINI APP SERVER & OTA UPDATES ====================
+    elif txt.startswith(("/start", "/help")): awaiting_spool = False; edit_spool_id = None; tg_send("🤖 <b>Панель управления принтером:</b>", MAIN_KB)
+
+# ==================== 11. WEB-СЕРВЕР MINI APP ====================
 WEBAPP_FILE = os.path.join(BASE_DIR, "webapp.html")
 CLOUDFLARED_BIN = os.path.join(BASE_DIR, "cloudflared")
 PUBLIC_WEBAPP_URL = ""
@@ -1226,65 +1217,27 @@ def _get_cached_stats():
     now_local = datetime.now(timezone.utc) + timedelta(hours=tz)
     days_labels, days_hours = [], []
     day_names = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     for shift in range(6, -1, -1):
         d_dt = now_local - timedelta(days=shift)
         days_labels.append("%s %02d" % (day_names[d_dt.weekday()], d_dt.day))
         d_start = d_dt.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=tz)
-        ts0 = (d_start - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds()
+        ts0 = (d_start - epoch).total_seconds()
         sec_sum = sum((j.get("print_duration") or 0) for j in history if ts0 <= (j.get("start_time") or 0) < ts0 + 86400)
         days_hours.append(round(sec_sum / 3600.0, 2))
     _hist_cache.update({"ts": time.time(), "totals": totals, "h7": h_7d, "h30": h_30d, "ok": ok_all, "hlen": len(history), "d_lbl": days_labels, "d_hrs": days_hours})
     return _hist_cache
 
-def check_github_update():
-    if not GITHUB_RAW_BASE or "YOUR_USERNAME" in GITHUB_RAW_BASE:
-        return {"ok": False, "error": "Ссылка на GitHub не настроена в config.ini"}
-    try:
-        url = GITHUB_RAW_BASE + "/printer_tg_bot.py?t=%d" % int(time.time())
-        with urllib.request.urlopen(url, timeout=8) as r:
-            head = r.read(1024).decode("utf-8", errors="ignore")
-        m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', head)
-        if not m:
-            return {"ok": False, "error": "Версия не найдена в репозитории"}
-        remote_v = m.group(1)
-        return {"ok": True, "current": VERSION, "latest": remote_v, "has_update": (remote_v != VERSION)}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-def apply_github_update():
-    chk = check_github_update()
-    if not chk.get("ok"):
-        return chk
-    try:
-        py_tmp = os.path.join(BASE_DIR, "printer_tg_bot.py.tmp")
-        html_tmp = os.path.join(BASE_DIR, "webapp.html.tmp")
-        ts = int(time.time())
-        with urllib.request.urlopen(GITHUB_RAW_BASE + "/printer_tg_bot.py?t=%d" % ts, timeout=15) as r:
-            with open(py_tmp, "wb") as f: f.write(r.read())
-        py_compile.compile(py_tmp, doraise=True)
-        with urllib.request.urlopen(GITHUB_RAW_BASE + "/webapp.html?t=%d" % ts, timeout=15) as r:
-            html_bytes = r.read()
-            if len(html_bytes) > 500:
-                with open(html_tmp, "wb") as f: f.write(html_bytes)
-                os.replace(html_tmp, WEBAPP_FILE)
-        os.replace(py_tmp, os.path.join(BASE_DIR, "printer_tg_bot.py"))
-        threading.Thread(target=lambda: (time.sleep(1.5), os.execv(sys.executable, [sys.executable] + sys.argv)), daemon=True).start()
-        return {"ok": True, "updated_to": chk["latest"]}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
 def verify_tg_init_data(init_data):
-    if not init_data:
-        return False
+    if not init_data: return False
     try:
         parsed = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
         recv_hash = parsed.pop("hash", "")
-        if not recv_hash:
-            return False
+        if not recv_hash: return False
         data_check = "\n".join("%s=%s" % (k, v) for k, v in sorted(parsed.items()))
         secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
         calc_hash = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calc_hash, recv_hash):
-            return False
+        if not hmac.compare_digest(calc_hash, recv_hash): return False
         if "user" in parsed and parsed["user"]:
             user_obj = json.loads(parsed["user"])
             return str(user_obj.get("id", "")) == str(CHAT_ID)
@@ -1321,7 +1274,10 @@ def build_webapp_payload():
     m_tot = totals.get("total_filament_used", 0) / 1000.0
     mats_m = st.get("materials_meters") or {}
     if mats_m:
-        fil_rub = sum(((meters * DENSITY_G_PER_M.get(t, G_PER_M_DEFAULT)) / 1000.0) * cfg_price(t) for t, meters in mats_m.items())
+        fil_rub = 0.0
+        for m_type, meters in mats_m.items():
+            dens = DENSITY_G_PER_M.get(m_type, G_PER_M_DEFAULT)
+            fil_rub += ((meters * dens) / 1000.0) * cfg_price(m_type)
         tracked_m = sum(mats_m.values())
         if m_tot > tracked_m:
             fil_rub += (((m_tot - tracked_m) * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default"))
@@ -1333,24 +1289,34 @@ def build_webapp_payload():
     ext = ps_all.get("extruder") or {}
     bed = ps_all.get("heater_bed") or {}
     return {
-        "version": VERSION, "has_cfs": HAS_CFS, "cfs_temp": cfs_temp, "cfs_hum": cfs_hum, "slots": slots_out,
+        "version": VERSION,
+        "has_cfs": HAS_CFS, "cfs_temp": cfs_temp, "cfs_hum": cfs_hum, "slots": slots_out,
         "single_spool_id": st.get("single_spool_id"),
         "spools": sorted([s for s in (st.get("spools") or []) if s.get("rem_g", 0) > 0], key=lambda x: x.get("id", 0)),
         "settings": {
-            "spool_tracking": bool(cfg("spool_tracking")), "timezone_offset": cfg("timezone_offset"),
-            "digest_hour": cfg("digest_hour"), "maint_hours": cfg("maint_hours"),
-            "nozzle_meters": cfg("nozzle_meters"), "filter_hours": cfg("filter_hours"),
-            "ptfe_meters": cfg("ptfe_meters"), "cutter_cuts": cfg("cutter_cuts"),
-            "cfs_humidity": cfg("cfs_humidity"), "elec_price": cfg("elec_price"),
-            "power_kw": cfg("power_kw"), "depr_hour": cfg("depr_hour"), "prices": cfg("prices")
+            "spool_tracking": bool(cfg("spool_tracking")),
+            "timezone_offset": cfg("timezone_offset"),
+            "digest_hour": cfg("digest_hour"),
+            "maint_hours": cfg("maint_hours"),
+            "nozzle_meters": cfg("nozzle_meters"),
+            "filter_hours": cfg("filter_hours"),
+            "ptfe_meters": cfg("ptfe_meters"),
+            "cutter_cuts": cfg("cutter_cuts"),
+            "cfs_humidity": cfg("cfs_humidity"),
+            "elec_price": cfg("elec_price"),
+            "power_kw": cfg("power_kw"),
+            "depr_hour": cfg("depr_hour"),
+            "prices": cfg("prices")
         },
         "printer": {
             "state": ps.get("state", "unknown"), "filename": ps.get("filename", ""),
             "progress": round((ds.get("progress", 0) or 0) * 100, 1),
             "duration": ps.get("print_duration", 0) or 0,
             "layer": info.get("current_layer"), "total_layer": info.get("total_layer"),
-            "nozzle_t": round(ext.get("temperature", 0) or 0, 1), "nozzle_target": round(ext.get("target", 0) or 0),
-            "bed_t": round(bed.get("temperature", 0) or 0, 1), "bed_target": round(bed.get("target", 0) or 0)
+            "nozzle_t": round(ext.get("temperature", 0) or 0, 1),
+            "nozzle_target": round(ext.get("target", 0) or 0),
+            "bed_t": round(bed.get("temperature", 0) or 0, 1),
+            "bed_target": round(bed.get("target", 0) or 0)
         },
         "consumables": {
             "maint_left_h": round(max(0.0, (st.get("last_maint_hours", 0) + float(cfg("maint_hours"))) - h_tot), 1),
@@ -1368,9 +1334,62 @@ def build_webapp_payload():
             "fil_rub": round(fil_rub), "elec_rub": round(elec),
             "direct_rub": round(direct), "full_rub": round(direct + depr),
             "waste_g": round(st.get("waste_g", 0)), "waste_rub": round(st.get("waste_rub", 0)),
-            "materials": mats_m, "days_labels": days_labels, "days_hours": days_hours
+            "materials": mats_m,
+            "days_labels": days_labels, "days_hours": days_hours
         }
     }
+
+def check_for_updates():
+    try:
+        url = "%s/printer_tg_bot.py?v=%s" % (GITHUB_RAW_BASE, VERSION)
+        with urllib.request.urlopen(url, timeout=15) as r:
+            new_code = r.read().decode("utf-8")
+        m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', new_code, re.MULTILINE)
+        if not m:
+            return None
+        new_version = m.group(1)
+        def parse_version(v):
+            try:
+                return [int(x) for x in v.lstrip("v").split(".")]
+            except Exception:
+                return [0]
+        current = parse_version(VERSION)
+        new = parse_version(new_version)
+        if new > current:
+            log.info("Доступно обновление: %s -> %s", VERSION, new_version)
+            return {"version": new_version, "code": new_code, "url": url}
+        else:
+            log.info("GitHub версия %s не выше текущей %s — пропускаем", new_version, VERSION)
+            return None
+    except Exception as e:
+        log.warning("Ошибка проверки обновлений: %s", e)
+        return None
+
+def apply_update(update_info):
+    try:
+        new_path = os.path.join(BASE_DIR, "printer_tg_bot_new.py")
+        with open(new_path, "w", encoding="utf-8") as f:
+            f.write(update_info["code"])
+        py_compile.compile(new_path, doraise=True)
+        try:
+            html_url = "%s/webapp.html?v=%s" % (GITHUB_RAW_BASE, update_info["version"])
+            with urllib.request.urlopen(html_url, timeout=15) as r:
+                html_code = r.read().decode("utf-8")
+            html_path = os.path.join(BASE_DIR, "webapp_new.html")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_code)
+        except Exception as e:
+            log.warning("Не удалось скачать webapp.html: %s", e)
+        os.replace(new_path, os.path.join(BASE_DIR, "printer_tg_bot.py"))
+        if os.path.exists(html_path):
+            os.replace(html_path, WEBAPP_FILE)
+        log.info("Обновление применено: %s -> %s. Перезапуск...", VERSION, update_info["version"])
+        tg_send("✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается..." % (VERSION, update_info["version"]), MAIN_KB)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        log.exception("Ошибка применения обновления")
+        tg_send("⚠️ <b>Ошибка обновления:</b> %s" % str(e), MAIN_KB)
+
 class WebAppHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
@@ -1393,130 +1412,143 @@ class WebAppHandler(BaseHTTPRequestHandler):
         return verify_tg_init_data(params.get("initData", ""))
 
     def _handle_api(self, path, params):
-        if path == "/api/state":
-            self._send_json(200, build_webapp_payload())
-        elif path == "/api/update/check":
-            self._send_json(200, check_github_update())
-        elif path == "/api/update/apply":
-            self._send_json(200, apply_github_update())
-        elif path == "/api/spool/delta":
-            sid = int(params.get("id", 0))
-            delta = float(params.get("delta", 0))
-            st = load_state()
-            for s in (st.get("spools") or []):
-                if s.get("id") == sid:
-                    s["rem_g"] = round(max(0.0, s.get("rem_g", 0) + delta), 1)
-                    break
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/settings/save":
-            st = load_state()
-            s = st.get("settings") or {}
-            if "spool_tracking" in params:
-                s["spool_tracking"] = str(params["spool_tracking"]).lower() in ("1", "true", "yes")
-            for k, cast in (
-                ("timezone_offset", int), ("digest_hour", int), ("maint_hours", float),
-                ("nozzle_meters", float), ("filter_hours", float), ("ptfe_meters", float),
-                ("cutter_cuts", int), ("cfs_humidity", int), ("elec_price", float),
-                ("power_kw", float), ("depr_hour", float)
-            ):
-                if k in params and str(params[k]) != "":
-                    s[k] = cast(params[k])
-            if "prices_json" in params and params["prices_json"]:
-                try:
-                    s["prices"] = json.loads(params["prices_json"])
-                except Exception:
-                    pass
-            st["settings"] = s
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/spool/save":
-            st = load_state()
-            spools = st.get("spools") or []
-            sid = params.get("id")
-            mat = str(params.get("mat") or "PLA").strip().upper()
-            nm = str(params.get("name") or "").strip()
-            if nm: nm = nm[:1].upper() + nm[1:]
-            grams = round(max(0.0, float(params.get("rem_g", 1000))), 1)
-            if sid:
-                for s in spools:
-                    if s.get("id") == int(sid):
-                        s["mat"] = mat
-                        if nm:
-                            s["name"] = nm
-                            s["group"] = normalize_color_group(nm)
-                        s["rem_g"] = grams
+        try:
+            if path == "/api/state":
+                self._send_json(200, build_webapp_payload())
+            elif path == "/api/spool/delta":
+                sid = int(params.get("id", 0))
+                delta = float(params.get("delta", 0))
+                st = load_state()
+                for s in (st.get("spools") or []):
+                    if s.get("id") == sid:
+                        s["rem_g"] = round(max(0.0, s.get("rem_g", 0) + delta), 1)
+                        break
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/settings/save":
+                st = load_state()
+                s = st.get("settings") or {}
+                if "spool_tracking" in params:
+                    s["spool_tracking"] = str(params["spool_tracking"]).lower() in ("1", "true", "yes")
+                for k, cast in (
+                    ("timezone_offset", int), ("digest_hour", int), ("maint_hours", float),
+                    ("nozzle_meters", float), ("filter_hours", float), ("ptfe_meters", float),
+                    ("cutter_cuts", int), ("cfs_humidity", int), ("elec_price", float),
+                    ("power_kw", float), ("depr_hour", float)
+                ):
+                    if k in params and str(params[k]) != "":
+                        s[k] = cast(params[k])
+                if "prices_json" in params and params["prices_json"]:
+                    try:
+                        s["prices"] = json.loads(params["prices_json"])
+                    except Exception:
+                        pass
+                st["settings"] = s
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/spool/save":
+                st = load_state()
+                spools = st.get("spools") or []
+                sid = params.get("id")
+                mat = str(params.get("mat") or "PLA").strip().upper()
+                nm = str(params.get("name") or "").strip()
+                if nm: nm = nm[:1].upper() + nm[1:]
+                grams = round(max(0.0, float(params.get("rem_g", 1000))), 1)
+                if sid:
+                    for s in spools:
+                        if s.get("id") == int(sid):
+                            s["mat"] = mat
+                            if nm:
+                                s["name"] = nm
+                                s["group"] = normalize_color_group(nm)
+                            s["rem_g"] = grams
+                else:
+                    nid = max([s.get("id", 0) for s in spools], default=0) + 1
+                    spools.append({"id": nid, "mat": mat, "name": nm or "Новый", "group": normalize_color_group(nm), "hex": "", "rem_g": grams})
+                st["spools"] = spools
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/spool/delete":
+                sid = int(params.get("id", 0))
+                st = load_state()
+                st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
+                ov = st.get("slot_overrides") or {}
+                for k in [k for k, v in ov.items() if v.get("id") == sid]: del ov[k]
+                st["slot_overrides"] = ov
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/slot/assign":
+                let = str(params.get("slot") or "")
+                sid = int(params.get("spool_id", 0))
+                st = load_state()
+                if let == "SINGLE":
+                    st["single_spool_id"] = sid
+                else:
+                    slots, _, _, _ = get_cfs_slots()
+                    if let in slots:
+                        ov = st.get("slot_overrides") or {}
+                        ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
+                        st["slot_overrides"] = ov
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/reset":
+                do_reset(str(params.get("target") or ""))
+                self._send_json(200, {"ok": True})
+            elif path == "/api/move":
+                ax = str(params.get("axis") or "")
+                if ax in ("x", "y", "z"):
+                    threading.Thread(target=_lube_worker, args=(ax,), daemon=True).start()
+                self._send_json(200, {"ok": True})
+            elif path == "/api/printer/cmd":
+                cmd = str(params.get("cmd") or "")
+                ep = {"pause": "/printer/print/pause", "resume": "/printer/print/resume", "cancel": "/printer/print/cancel"}.get(cmd)
+                if ep:
+                    try:
+                        urllib.request.urlopen(MOONRAKER + ep, data=b"", timeout=5).close()
+                    except Exception:
+                        pass
+                self._send_json(200, {"ok": True})
+            elif path == "/api/light/toggle":
+                st = load_state()
+                cur_on = bool(st.get("light_on", False))
+                new_on = not cur_on
+                st["light_on"] = new_on
+                save_state(st)
+                val = 1 if new_on else 0
+                objs = moonraker_get("/printer/objects/list", 4).get("objects") or []
+                cmds = []
+                for o in objs:
+                    ol = o.lower()
+                    if (o.startswith("output_pin ") or o.startswith("led ")) and any(k in ol for k in ("light", "led", "lamp", "caselight")):
+                        pin_name = o.split(" ", 1).pop()
+                        if o.startswith("output_pin "):
+                            cmds.append("SET_PIN PIN=%s VALUE=%d" % (pin_name, val))
+                        else:
+                            cmds.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d" % (pin_name, val, val, val, val))
+                if cmds:
+                    try:
+                        urllib.request.urlopen(MOONRAKER + "/printer/gcode/script", data=urllib.parse.urlencode({"script": "\n".join(cmds)}).encode(), timeout=5).close()
+                    except Exception:
+                        pass
+                self._send_json(200, {"ok": True, "light_on": new_on})
+            elif path == "/api/update/check":
+                update = check_for_updates()
+                if update:
+                    self._send_json(200, {"ok": True, "has_update": True, "new_version": update["version"]})
+                else:
+                    self._send_json(200, {"ok": True, "has_update": False, "current_version": VERSION})
+            elif path == "/api/update/apply":
+                update = check_for_updates()
+                if update:
+                    threading.Thread(target=apply_update, args=(update,), daemon=True).start()
+                    self._send_json(200, {"ok": True, "message": "Updating to v%s..." % update["version"]})
+                else:
+                    self._send_json(200, {"ok": True, "message": "Already up to date"})
             else:
-                nid = max([s.get("id", 0) for s in spools], default=0) + 1
-                spools.append({"id": nid, "mat": mat, "name": nm or "Новый", "group": normalize_color_group(nm), "hex": "", "rem_g": grams})
-            st["spools"] = spools
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/spool/delete":
-            sid = int(params.get("id", 0))
-            st = load_state()
-            st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
-            ov = st.get("slot_overrides") or {}
-            for k in [k for k, v in ov.items() if v.get("id") == sid]: del ov[k]
-            st["slot_overrides"] = ov
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/slot/assign":
-            let = str(params.get("slot") or "")
-            sid = int(params.get("spool_id", 0))
-            st = load_state()
-            if let == "SINGLE":
-                st["single_spool_id"] = sid
-            else:
-                slots, _, _, _ = get_cfs_slots()
-                if let in slots:
-                    ov = st.get("slot_overrides") or {}
-                    ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
-                    st["slot_overrides"] = ov
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/reset":
-            do_reset(str(params.get("target") or ""))
-            self._send_json(200, {"ok": True})
-        elif path == "/api/move":
-            ax = str(params.get("axis") or "")
-            if ax in ("x", "y", "z"):
-                threading.Thread(target=_lube_worker, args=(ax,), daemon=True).start()
-            self._send_json(200, {"ok": True})
-        elif path == "/api/printer/cmd":
-            cmd = str(params.get("cmd") or "")
-            ep = {"pause": "/printer/print/pause", "resume": "/printer/print/resume", "cancel": "/printer/print/cancel"}.get(cmd)
-            if ep:
-                try:
-                    urllib.request.urlopen(MOONRAKER + ep, data=b"", timeout=5).close()
-                except Exception:
-                    pass
-            self._send_json(200, {"ok": True})
-        elif path == "/api/light/toggle":
-            st = load_state()
-            cur_on = bool(st.get("light_on", False))
-            new_on = not cur_on
-            st["light_on"] = new_on
-            save_state(st)
-            val = 1 if new_on else 0
-            objs = moonraker_get("/printer/objects/list", 4).get("objects") or []
-            cmds = []
-            for o in objs:
-                ol = o.lower()
-                if (o.startswith("output_pin ") or o.startswith("led ")) and any(k in ol for k in ("light", "led", "lamp", "caselight")):
-                    pin_name = o.split(" ", 1).pop()
-                    if o.startswith("output_pin "):
-                        cmds.append("SET_PIN PIN=%s VALUE=%d" % (pin_name, val))
-                    else:
-                        cmds.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d" % (pin_name, val, val, val, val))
-            if cmds:
-                try:
-                    urllib.request.urlopen(MOONRAKER + "/printer/gcode/script", data=urllib.parse.urlencode({"script": "\n".join(cmds)}).encode(), timeout=5).close()
-                except Exception:
-                    pass
-            self._send_json(200, {"ok": True, "light_on": new_on})
-        else:
-            self._send_json(404, {"error": "unknown endpoint"})
+                self._send_json(404, {"error": "unknown endpoint"})
+        except Exception as e:
+            log.exception("API Error on %s: %s", path, e)
+            self._send_json(500, {"error": str(e)})
 
     def do_GET(self):
         global CAM_SNAPSHOT_URL, last_cam_fail_ts
@@ -1536,18 +1568,14 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": "webapp.html not found"})
         elif path == "/api/cam.jpg":
             img = None
-            if not CAM_SNAPSHOT_URL and time.time() - last_cam_fail_ts > 60:
-                detect_environment()
+            if not CAM_SNAPSHOT_URL and time.time() - last_cam_fail_ts > 60: detect_environment()
             if CAM_SNAPSHOT_URL:
                 try:
                     with urllib.request.urlopen(CAM_SNAPSHOT_URL, timeout=5) as r:
                         cand = r.read()
-                    if len(cand) > 200:
-                        img = cand
+                        if len(cand) > 200: img = cand
                 except Exception as e:
-                    log.warning("WebApp cam err: %s", e)
-                    CAM_SNAPSHOT_URL = ""
-                    last_cam_fail_ts = time.time()
+                    log.warning("WebApp cam err: %s", e); CAM_SNAPSHOT_URL = ""; last_cam_fail_ts = time.time()
             if img:
                 self.send_response(200)
                 self.send_header("Content-Type", "image/jpeg")
@@ -1585,63 +1613,57 @@ def _tunnel_worker():
         return
     while True:
         try:
-            proc = subprocess.Popen(
-                [CLOUDFLARED_BIN, "tunnel", "--url", "http://127.0.0.1:%d" % WEBAPP_PORT, "--protocol", "http2", "--no-autoupdate"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-            )
+            proc = subprocess.Popen([CLOUDFLARED_BIN, "tunnel", "--url", "http://127.0.0.1:%d" % WEBAPP_PORT, "--protocol", "http2", "--no-autoupdate"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             for raw_line in iter(proc.stdout.readline, b""):
                 line = raw_line.decode("utf-8", errors="ignore")
                 m = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
                 if m:
                     url = m.group(0)
-                    if url == "https://trycloudflare.com":
-                        continue
                     if url != PUBLIC_WEBAPP_URL:
                         PUBLIC_WEBAPP_URL = url
                         log.info("Mini App URL: %s", url)
-                        for _ in range(5):
-                            res = tg_api("setChatMenuButton", {
-                                "chat_id": CHAT_ID,
-                                "menu_button": json.dumps({"type": "web_app", "text": "📱 Панель", "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
-                            })
-                            log.info("setChatMenuButton: %s", res)
-                            if isinstance(res, dict) and res.get("ok"):
-                                break
-                            time.sleep(3)
+                        res = tg_api("setChatMenuButton", {
+                            "chat_id": CHAT_ID,
+                            "menu_button": json.dumps({"type": "web_app", "text": "📱 Панель", "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
+                        })
+                        log.info("setChatMenuButton: %s", res)
             proc.wait()
         except Exception as e:
             log.warning("Tunnel err: %s", e)
-        time.sleep(10)
-
+            time.sleep(10)
 
 def start_webapp_services():
     try:
-        if USE_CLOUDFLARED:
-            os.system("killall cloudflared 2>/dev/null")
+        if USE_CLOUDFLARED: os.system("killall cloudflared 2>/dev/null")
         srv = ThreadingHTTPServer(("127.0.0.1", WEBAPP_PORT), WebAppHandler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        if USE_CLOUDFLARED:
-            threading.Thread(target=_tunnel_worker, daemon=True).start()
+        if USE_CLOUDFLARED: threading.Thread(target=_tunnel_worker, daemon=True).start()
         log.info("WebApp сервер запущен на порту %d", WEBAPP_PORT)
     except Exception as e:
         log.warning("WebApp start err: %s", e)
-# ==================== 13. MAIN MONITORING LOOP ====================
+
+# ==================== 12. ОСНОВНОЙ ЦИКЛ МОНИТОРИНГА ====================
+LOCK_FILE = os.path.join(BASE_DIR, "printer_tg_bot.lock")
+try:
+    _lock_fd = open(LOCK_FILE, "w")
+    fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    _lock_fd.write(str(os.getpid()))
+    _lock_fd.flush()
+except (IOError, OSError):
+    log.critical("Another printer_tg_bot instance is already running! Exiting.")
+    print("Another instance is already running! Exiting.")
+    sys.exit(0)
+
 detect_environment()
 start_webapp_services()
 
 def migrate_state(st):
     changed = False
-    if "spools" not in st:
-        st["spools"] = []
-        changed = True
+    if "spools" not in st: st["spools"] = []; changed = True
     for sp in st["spools"]:
-        if "mat" not in sp:
-            sp["mat"] = "PLA"; changed = True
-        if "group" not in sp:
-            sp["group"] = normalize_color_group(sp.get("name") or sp.get("hex") or "")
-            changed = True
-        if "rem_g" not in sp:
-            sp["rem_g"] = 0.0; changed = True
+        if "mat" not in sp: sp["mat"] = "PLA"; changed = True
+        if "group" not in sp: sp["group"] = normalize_color_group(sp.get("name") or sp.get("hex") or ""); changed = True
+        if "rem_g" not in sp: sp["rem_g"] = 0.0; changed = True
     return changed
 
 _st = load_state()
@@ -1649,58 +1671,10 @@ if migrate_state(_st):
     save_state(_st)
     log.info("Состояние мигрировано на новую схему")
 
-def send_job_start_card(fname, with_thumb=True):
-    meta = get_file_meta(fname)
-    est = meta.get("estimated_time", 0) or 0
-    w, direct, full, elec, depr = calc_costs(meta, est)
-    flush_g = get_flush_weight(meta)
-    lines = ["🖨 <b>Начало печати:</b>", "• Файл: <b>%s</b>" % esc(fname)]
-    if est > 0:
-        end_dt = (datetime.now(timezone.utc) + timedelta(hours=int(cfg("timezone_offset")), seconds=est)).strftime("%d.%m.%Y %H:%M")
-        lines.extend(["• Длительность: <b>~%s</b>" % format_dur(est), "• Окончание: <b>~%s</b>" % end_dt])
-    if w > 0:
-        lines.append("• Расход пластика: <b>~%.1f г</b>%s" % (w, " (промывка CFS: ~%.1f г)" % flush_g if flush_g > 0.1 else ""))
-    extra_btns = []
-    if cfg("spool_tracking"):
-        slots, active_let, _, _ = get_cfs_slots()
-        used_items = get_used_slots(fname, meta, slots, active_let, w)
-        st_now = load_state()
-        for let, part_g in used_items:
-            s_obj = slots.get(let) or {"mat": "PLA", "hex": "000000"}
-            sp = resolve_slot_spool(st_now, let, s_obj["mat"], s_obj["hex"], auto_create=HAS_CFS)
-            if sp:
-                if let == "SINGLE":
-                    lines.append("• Катушка: <b>%s</b> (в наличии %.0f г)" % (esc(sp_title(sp)), sp["rem_g"]))
-                    extra_btns.append([{"text": "🔄 Сменить катушку", "callback_data": "sp_ovslot_SINGLE_start"}])
-                else:
-                    w_fmt = "%.2f г" % part_g if part_g < 0.1 else "%.1f г" % part_g
-                    w_part_str = "нужно ~%s | " % w_fmt if len(used_items) > 1 and part_g > 0 else ""
-                    lines.append("• Слот %s: <b>%s</b> (%sв наличии %.0f г)" % (let, esc(sp_title(sp)), w_part_str, sp["rem_g"]))
-                    extra_btns.append([{"text": "🔄 Сменить (Слот %s)" % let, "callback_data": "sp_ovslot_%s_start" % let}])
-                if part_g > 0 and sp["rem_g"] < part_g:
-                    lines.append("⚠️ <i>Внимание: не хватит ~%.0f г до конца детали!</i>" % (part_g - sp["rem_g"]))
-    if direct > 0:
-        lines.extend(["", "💰 <b>Расчетная стоимость:</b>",
-            "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)" % (direct, elec),
-            "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)" % (full, depr)])
-    start_kb = {"inline_keyboard": MAIN_KB["inline_keyboard"] + extra_btns} if extra_btns else MAIN_KB
-    if with_thumb:
-        send_thumbnail(meta, "\n".join(lines), start_kb)
-    else:
-        tg_send("\n".join(lines), start_kb)
-
-def _commands_worker():
-    while True:
-        try:
-            check_commands()
-        except Exception:
-            log.exception("Commands worker error")
-            time.sleep(5)
-
-threading.Thread(target=_commands_worker, daemon=True).start()
-
 mode_str = "CFS (4 слота)" if HAS_CFS else "Одиночная катушка"
 tg_send("✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>" % (VERSION, mode_str), MAIN_KB)
+
+threading.Thread(target=check_commands, daemon=True).start()
 
 while True:
     try:
@@ -1713,29 +1687,53 @@ while True:
         state, fname, msg = ps.get("state"), ps.get("filename", ""), ps.get("message", "")
         used_mm, print_dur = ps.get("filament_used", 0) or 0, ps.get("print_duration", 0) or 0
         if last_state is None and state in ("printing", "paused"):
-            last_state = state
-            last_fname = fname
-            time.sleep(POLL_INTERVAL)
-            continue
-        if (state == "printing" and last_state == "printing"
-            and fname and last_fname and fname != last_fname):
+            last_state = state; last_fname = fname
+            time.sleep(POLL_INTERVAL); continue
+        if (state == "printing" and last_state == "printing" and fname and last_fname and fname != last_fname):
             log.warning("Пропущенное завершение: %s -> %s", last_fname, fname)
             handle_missed_job_end(last_fname)
             last_state = None
         if state == "printing" and last_state not in ("printing", "paused"):
             if TIMELAPSE_DIR and os.path.isdir(TIMELAPSE_DIR):
                 print_start_files = set(f for f in os.listdir(TIMELAPSE_DIR) if f.endswith(".mp4"))
-            send_job_start_card(fname, with_thumb=True)
+            meta = get_file_meta(fname); est = meta.get("estimated_time", 0) or 0
+            w, direct, full, elec, depr = calc_costs(meta, est); flush_g = get_flush_weight(meta)
+            lines = ["🖨 <b>Начало печати:</b>", "• Файл: <b>%s</b>" % esc(fname)]
+            if est > 0:
+                end_dt = (datetime.now(timezone.utc) + timedelta(hours=int(cfg("timezone_offset")), seconds=est)).strftime("%d.%m.%Y %H:%M")
+                lines.extend(["• Длительность: <b>~%s</b>" % format_dur(est), "• Окончание: <b>~%s</b>" % end_dt])
+            if w > 0:
+                lines.append("• Расход пластика: <b>~%.1f г</b>%s" % (w, " (промывка CFS: ~%.1f г)" % flush_g if flush_g > 0.1 else ""))
+            extra_btns = []
+            if cfg("spool_tracking"):
+                slots, active_let, _, _ = get_cfs_slots(); used_items = get_used_slots(fname, meta, slots, active_let, w); st_now = load_state()
+                for let, part_g in used_items:
+                    s_obj = slots.get(let) or {"mat": "PLA", "hex": "000000"}
+                    sp = resolve_slot_spool(st_now, let, s_obj["mat"], s_obj["hex"], auto_create=HAS_CFS)
+                    if sp:
+                        if let == "SINGLE":
+                            lines.append("• Катушка: <b>%s</b> (в наличии %.0f г)" % (esc(sp_title(sp)), sp["rem_g"]))
+                            extra_btns.append([{"text": "🔄 Сменить катушку", "callback_data": "sp_ovslot_SINGLE"}])
+                        else:
+                            w_part_str = "нужно ~%.1f г | " % part_g if len(used_items) > 1 and part_g > 0 else ""
+                            lines.append("• Слот %s: <b>%s</b> (%sв наличии %.0f г)" % (let, esc(sp_title(sp)), w_part_str, sp["rem_g"]))
+                            extra_btns.append([{"text": "🔄 Сменить (Слот %s)" % let, "callback_data": "sp_ovslot_%s" % let}])
+                        if part_g > 0 and sp["rem_g"] < part_g:
+                            lines.append("⚠️ <i>Внимание: не хватит ~%.0f г до конца детали!</i>" % (part_g - sp["rem_g"]))
+            if direct > 0:
+                lines.extend(["", "💰 <b>Расчетная стоимость:</b>",
+                    "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)" % (direct, elec),
+                    "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)" % (full, depr)])
+            start_kb = {"inline_keyboard": MAIN_KB["inline_keyboard"] + extra_btns} if extra_btns else MAIN_KB
+            send_thumbnail(meta, "\n".join(lines), start_kb)
         elif state == "paused" and last_state != "paused":
             p_msg = "⚠️ <b>Кончился филамент!</b>\nПечать на паузе.\n• Файл: <b>%s</b>" % esc(fname) if ("filament" in msg.lower() or "out of" in msg.lower()) else "⏸ <b>Печать на паузе</b>\n• Причина: %s\n• Файл: <b>%s</b>" % (esc(msg or "не указана"), esc(fname))
             send_usb_photo(p_msg, MAIN_KB)
         elif state == "complete" and last_state != "complete":
             process_completed_job(fname, get_file_meta(fname), print_dur, used_mm, send_video=True)
         elif (state == "error" and last_state != "error") or (state in ("standby", "cancelled") and last_state in ("printing", "paused")):
-            meta = get_file_meta(fname)
-            record_material_usage(meta, used_mm, fname)
-            w, direct, full, _, depr = calc_costs(meta, print_dur, used_mm)
-            record_waste(w, direct)
+            meta = get_file_meta(fname); record_material_usage(meta, used_mm, fname)
+            w, direct, full, _, depr = calc_costs(meta, print_dur, used_mm); record_waste(w, direct)
             spool_notes = deduct_spool_weight(fname, meta, w)
             lines = ["❌ <b>Ошибка печати:</b>" if state == "error" else "⏹ <b>Печать остановлена/отменена:</b>"]
             if state == "error" and msg: lines.append("• Причина: %s" % esc(msg))
@@ -1744,15 +1742,12 @@ while True:
                 lines.extend(["", "🗑 <b>Потери на брак:</b>",
                     "• Пластик: <b>%.1f г</b>" % w,
                     "• Прямые затраты: <b>~%.1f руб.</b> (с аморт. ~%.1f руб.)" % (direct, full)])
-            if spool_notes:
-                lines.extend(["", spool_notes])
+            if spool_notes: lines.extend(["", spool_notes])
             out_txt = "\n".join(lines)
             if state == "error": send_usb_photo(out_txt, MAIN_KB)
             else: tg_send(out_txt, MAIN_KB)
             update_counters(1 if (HAS_CFS and used_mm > 0) else 0)
-        last_state = state
-        last_fname = fname
+        last_state = state; last_fname = fname
     except Exception:
         log.exception("Loop error")
     time.sleep(POLL_INTERVAL)
-

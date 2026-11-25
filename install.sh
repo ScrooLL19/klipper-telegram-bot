@@ -85,10 +85,13 @@ chmod +x printer_tg_bot.py uninstall.sh
 
 if [ ! -f secrets.ini ]; then
     echo ""
-    printf "Enter your Telegram Bot TOKEN from @BotFather: "
-    read BOT_TOKEN
-    printf "Enter your Telegram CHAT_ID: "
-    read BOT_CHAT_ID
+     printf "Enter your Telegram Bot TOKEN from @BotFather: "
+     read BOT_TOKEN
+     BOT_TOKEN=$(printf "%s" "$BOT_TOKEN" | tr -cd '0-9A-Za-z_:-')
+     printf "Enter your Telegram CHAT_ID: "
+     read BOT_CHAT_ID
+ BOT_CHAT_ID=$(printf "%s" "$BOT_CHAT_ID" | tr -cd '0-9-')
+
     cat << EOF > secrets.ini
 [telegram]
 token = $BOT_TOKEN
@@ -134,9 +137,11 @@ start_service() {
     procd_close_instance
 }
 EOF
+    tr -d '\r' < /etc/init.d/printer_tg_bot > /tmp/init_b && mv /tmp/init_b /etc/init.d/printer_tg_bot
     chmod +x /etc/init.d/printer_tg_bot
     /etc/init.d/printer_tg_bot enable
     /etc/init.d/printer_tg_bot restart
+
 elif command -v systemctl >/dev/null 2>&1; then
     echo "-> Configuring systemd auto-start..."
     cat << EOF > /etc/systemd/system/printer_tg_bot.service
