@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 
 # ==================== STATE CACHE ====================
 state_lock = threading.Lock()
@@ -360,9 +360,21 @@ def get_language():
     st = load_state()
     return (st.get("settings") or {}).get("language", "ru")
 
+_last_kb_lang = [None]
+
 def t(key, *args):
     """Перевод строки. Если ключа нет — возвращает русский текст как fallback."""
     lang = get_language()
+    if lang != _last_kb_lang[0]:
+        _last_kb_lang[0] = lang
+        global MAIN_KB, WELCOME_KB, MAINT_KB, RESET_KB
+        try:
+            MAIN_KB = get_main_kb()
+            WELCOME_KB = get_welcome_kb()
+            MAINT_KB = get_maint_kb()
+            RESET_KB = get_reset_kb()
+        except Exception:
+            pass
     text = LANG.get(lang, LANG["ru"]).get(key, LANG["ru"].get(key, key))
     if args:
         try:
@@ -450,6 +462,16 @@ if not TOKEN or not CHAT_ID:
     log.critical("ERROR: token or chat_id missing! Check secrets.ini")
     print("ERROR: token or chat_id missing! Check secrets.ini")
     sys.exit(1)
+
+# ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+last_state = None
+last_fname = ""
+last_update_id = 0
+awaiting_spool = False
+edit_spool_id = None
+print_start_files = set()
+last_cam_fail_ts = 0.0
+
 
 # ==================== 2. МЕНЮ TELEGRAM ====================
 def get_main_kb():
@@ -1413,6 +1435,7 @@ def _lube_worker(axis):
 # ==================== 10. ОБРАБОТКА КОМАНД (ОТДЕЛЬНЫЙ ПОТОК) ====================
 def check_commands():
     global last_update_id
+    log.info("✅ check_commands thread started")
     while True:
         try:
             res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25}, timeout=30).get("result", [])
@@ -1752,23 +1775,37 @@ def check_for_updates():
 
 def apply_update(update_info):
     try:
+        # 1. Скачиваем и проверяем бэкенд
         new_path = os.path.join(BASE_DIR, "printer_tg_bot_new.py")
         with open(new_path, "w", encoding="utf-8") as f:
             f.write(update_info["code"])
         py_compile.compile(new_path, doraise=True)
+        log.info("✅ Backend updated and compiled successfully")
+        
+        # 2. Скачиваем фронтенд
+        html_updated = False
         try:
             html_url = "%s/webapp.html?v=%s" % (GITHUB_RAW_BASE, update_info["version"])
-            with urllib.request.urlopen(html_url, timeout=15) as r:
+            log.info("📥 Downloading webapp.html from %s", html_url)
+            with urllib.request.urlopen(html_url, timeout=30) as r:
                 html_code = r.read().decode("utf-8")
             html_path = os.path.join(BASE_DIR, "webapp_new.html")
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(html_code)
+            html_updated = True
+            log.info("✅ Frontend downloaded successfully")
         except Exception as e:
-            log.warning("Не удалось скачать webapp.html: %s", e)
+            log.warning("⚠️ Не удалось скачать webapp.html: %s", e)
+        
+        # 3. Применяем обновления
         os.replace(new_path, os.path.join(BASE_DIR, "printer_tg_bot.py"))
-        if os.path.exists(html_path):
+        if html_updated and os.path.exists(html_path):
             os.replace(html_path, WEBAPP_FILE)
-        log.info("Обновление применено: %s -> %s. Перезапуск...", VERSION, update_info["version"])
+            log.info("✅ Both backend and frontend updated")
+        else:
+            log.warning("⚠️ Only backend updated, frontend update failed")
+        
+        log.info("🔄 Обновление применено: %s -> %s. Перезапуск...", VERSION, update_info["version"])
         tg_send("✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается..." % (VERSION, update_info["version"]), MAIN_KB)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
