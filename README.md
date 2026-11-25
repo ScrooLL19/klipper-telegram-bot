@@ -29,7 +29,7 @@ Built purely on **Python 3 standard library** (no `pip` or external packages req
 Connect to your printer via SSH and run:
 
 ```
-grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf; python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.urlopen('https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main/install.sh',timeout=15).read().replace(b'\r\n',b'\n'))" && sh /tmp/install.sh
+python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.urlopen('https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main/install.sh',timeout=15).read().replace(b'\r\n',b'\n'))" && sh /tmp/install.sh
 
 ```
 
@@ -40,10 +40,9 @@ The installer automatically downloads all files, fetches the matching `cloudflar
 
 To completely remove the bot, Mini App, and background service without affecting Klipper or Moonraker files:
 
-```sh
+```
 sh /root/printer_tg_bot/uninstall.sh
 ```
-
 ---
 
 ## 🇷🇺 Русский
@@ -71,8 +70,7 @@ sh /root/printer_tg_bot/uninstall.sh
 Подключитесь к принтеру по SSH и выполните:
 
 ```
-grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || printf "\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n" >> /etc/resolv.conf; python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.urlopen('https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main/install.sh',timeout=15).read().replace(b'\r\n',b'\n'))" && sh /tmp/install.sh
-
+ python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.urlopen('https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main/install.sh',timeout=15).read().replace(b'\r\n',b'\n'))" && sh /tmp/install.sh
 
 ```
 
