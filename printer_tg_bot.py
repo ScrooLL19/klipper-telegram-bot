@@ -6,7 +6,356 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
+VERSION = "1.0.3"
+
 VERSION = "1.0.2"
+
+# ==================== МУЛЬТИЯЗЫЧНОСТЬ (RU / EN) ====================
+LANG = {
+    "ru": {
+        # Меню Telegram
+        "menu_status": "📊 Статус",
+        "menu_stats": "📈 Статистика",
+        "menu_spools": "🧵 Катушки",
+        "menu_cons": "🔩 Расходники",
+        "menu_maint": "🛠 Обслуживание",
+        "maint_x": "↔️ Прогнать ось X",
+        "maint_y": "↕️ Прогнать ось Y",
+        "maint_z": "⬆️ Прогнать ось Z (винты)",
+        "maint_reset": "🔄 Сброс счетчиков",
+        "maint_back": "⬅️ Назад в меню",
+        "rst_nozzle": "Сбросить сопло",
+        "rst_filter": "Сбросить фильтр",
+        "rst_ptfe": "Сбросить PTFE",
+        "rst_cutter": "Сбросить нож",
+        "rst_back": "⬅️ Назад в обслуживание",
+        # Уведомления
+        "print_started": "🖨 <b>Начало печати:</b>",
+        "print_completed": "🏁 <b>Печать завершена:</b>",
+        "print_paused": "⏸ <b>Печать на паузе</b>",
+        "filament_out": "⚠️ <b>Кончился филамент!</b>\nПечать на паузе.",
+        "print_error": "❌ <b>Ошибка печати:</b>",
+        "print_cancelled": "⏹ <b>Печать остановлена/отменена:</b>",
+        "missed_end": "⏹ <b>Пропущенное завершение печати (статус: %s):</b>",
+        "file": "• Файл: <b>%s</b>",
+        "duration": "• Длительность: <b>~%s</b>",
+        "eta": "• Окончание: <b>~%s</b>",
+        "remaining": "• Осталось: <b>~%s</b>",
+        "filament_used": "• Расход пластика: <b>~%.1f г</b>",
+        "cfs_flush": " (промывка CFS: ~%.1f г)",
+        "cost_title": "💰 <b>Расчетная стоимость:</b>",
+        "cost_direct": "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)",
+        "cost_depr": "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)",
+        "spool": "• Катушка: <b>%s</b> (в наличии %.0f г)",
+        "slot": "• Слот %s: <b>%s</b> (%sв наличии %.0f г)",
+        "slot_need": "нужно ~%.1f г | ",
+        "low_filament": "⚠️ <i>Внимание: не хватит ~%.0f г до конца детали!</i>",
+        "change_spool": "🔄 Сменить катушку",
+        "change_slot": "🔄 Сменить (Слот %s)",
+        "reason": "• Причина: %s",
+        "waste_title": "🗑 <b>Потери на брак:</b>",
+        "waste_filament": "• Пластик: <b>%.1f г</b>",
+        "waste_cost": "• Прямые затраты: <b>~%.1f руб.</b> (с аморт. ~%.1f руб.)",
+        "spool_remaining": "%s: осталось <b>%.0f г</b>",
+        "spool_prefix": "• Катушка ",
+        "spool_tracking_off": "🧵 <b>Учет склада катушек отключен.</b>\nВключить его можно в <b>📱 Панель → Катушки / Настройки</b>.",
+        "spools_cfs_title": "🧵 <b>Склад катушек и CFS (%s°C | влажн. %s%%):</b>",
+        "spools_cfs_current": "📦 <b>Сейчас в CFS:</b>",
+        "spools_cfs_empty": "• Слоты CFS пусты",
+        "spools_cfs_slot": "• Слот %s%s: <b>%s</b> — %.0f г",
+        "spools_cfs_slot_empty": "• Слот %s%s: <i>не назначена</i>",
+        "spools_single_title": "🧵 <b>Склад катушек принтера:</b>",
+        "spools_single_current": "📦 <b>Установлена сейчас:</b>",
+        "spools_single_active": "• Активная: <b>%s</b> — %.0f г",
+        "spools_single_none": "• Катушка не выбрана (добавьте её ниже)",
+        "spools_all_title": "🗄 <b>Все открытые катушки (%d шт.):</b>",
+        "spools_all_item": "• %s: <b>%.0f г</b>",
+        "spool_add": "➕ Добавить",
+        "spool_edit": "✏️ Редактировать",
+        "spool_refine": "🔄 Уточнить слот",
+        "spool_select": "🔄 Выбрать текущую",
+        "spool_delete": "🗑 Удалить",
+        "back_menu": "⬅️ Назад в меню",
+        "new_spool_prompt": "✍️ <b>Новая катушка:</b>\nОтправьте тип, цвет и вес (г).\nПример: <b>PLA Черный матовый 850</b>",
+        "cancel": "❌ Отмена",
+        "edit_spool_prompt": "✏️ <b>Редактирование катушки:</b>\nВыберите катушку из списка:",
+        "edit_spool_detail": "✏️ <b>Редактирование %s</b> (сейчас %.0f г):\nОтправьте <b>новый вес</b> (например: <b>650</b>) или <b>новое название</b> (например: <b>PLA Темно-зеленый 850</b>):",
+        "refine_cfs": "🔄 <b>Уточнение слота CFS:</b>",
+        "select_current": "📥 <b>Выберите текущую катушку:</b>",
+        "select_slot": "📥 <b>Выберите бобину для Слота %s:</b>",
+        "spool_selected": "✅ Катушка выбрана",
+        "slot_refined": "✅ Слот %s уточнен",
+        "delete_prompt": "🗑 <b>Удаление катушки:</b>\nВыберите катушку из списка:",
+        "delete_confirm": "⚠️ <b>Вы уверены, что хотите удалить катушку?</b>\n• <b>%s</b> (%.0f г)",
+        "delete_yes": "✅ Да, удалить",
+        "deleted": "🗑 Удалено",
+        "consumables_view": "🛠 <b>Обслуживание и смазка:</b>",
+        "reset_counters": "🔄 <b>Сброс счетчиков:</b>",
+        "panel_title": "🤖 <b>Панель управления принтером:</b>",
+        "spool_updated": "✅ Катушка <b>%s</b> (%.0f г) обновлена!\n",
+        "spool_added": "✅ Катушка <b>%s</b> (%.0f г) добавлена!\n",
+        "spool_format": "⚠️ Формат: <b>PLA Черный матовый 850</b>",
+        "cfs_humidity_warn": "💧 <b>Повышенная влажность в CFS: %d%%</b> (темп. %s°C)\nПора заменить силикагель или включить сушку филамента.",
+        "maint_due": "🛠 <b>Пора провести ТО принтера!</b>\nНаработка: <b>%.1f ч</b>\nОчистите и смажьте направляющие/винты, проверьте ремни.",
+        "nozzle_warn": "⚠️ <b>Ресурс сопла выработан!</b>\nПробег: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.",
+        "filter_warn": "🌬 <b>Пора заменить фильтр воздуха!</b>\nНаработка фильтра: <b>%.1f / %d ч</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.",
+        "ptfe_warn": "➰ <b>Проверьте PTFE-трубку!</b>\nПробег филамента через трубку: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.",
+        "cutter_warn": "✂️ <b>Пора проверить лезвие резака филамента!</b>\nВыполнено резов: <b>%d / %d</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.",
+        "consumables_title": "🔩 <b>Ресурс расходников и ТО:</b>",
+        "consumables_maint": "• До планового ТО: <b>~%.1f ч</b>",
+        "consumables_nozzle": "• Сопло: <b>%.1f / %d м</b>",
+        "consumables_filter": "• Фильтр: <b>%.1f / %d ч</b>",
+        "consumables_ptfe": "• PTFE-трубка: <b>%.1f / %d м</b>",
+        "consumables_cutter": "• Нож резака: <b>%d / %d резов</b>",
+        "stats_title": "📈 <b>Общая статистика принтера:</b>",
+        "stats_time": "• Время печати: <b>%.1f ч</b>",
+        "stats_filament": "• Расход филамента: <b>%.1f м</b> (~%.1f катушек)",
+        "stats_jobs": "• Всего печатей: <b>%d</b>",
+        "stats_reliability": "• Рейтинг надежности: <b>%.0f%%</b> (%d из %d без сбоев)",
+        "stats_waste": "• Потери на брак: <b>%.0f г</b> (~%.0f руб. | %.1f%%)",
+        "stats_longest": "• Рекорд печати: <b>%.1f ч</b>",
+        "stats_avg": "• В среднем за печать: <b>~%.1f ч / ~%.0f г</b>",
+        "stats_load_title": "⏱ <b>Нагрузка принтера (КПД):</b>",
+        "stats_7d": "• За 7 дней: <b>%.1f ч</b> (~%.1f ч/день | КПД %.0f%%)",
+        "stats_30d": "• За 30 дней: <b>%.1f ч</b> (~%.1f ч/день | КПД %.0f%%)",
+        "stats_mats_title": "🧵 <b>Расход по типам пластика:</b>",
+        "stats_mat_item": "• %s: <b>%.1f м</b> (~%.1f катушек)",
+        "stats_costs_title": "💰 <b>Затраты за всё время:</b>",
+        "stats_costs_direct": "• Прямые (пластик+свет): <b>~%.0f руб.</b> (свет ~%.0f руб.)",
+        "stats_costs_depr": "• С учетом амортизации: <b>~%.0f руб.</b> (аморт. ~%.0f руб.)",
+        "digest_title": "📅 <b>Еженедельный дайджест принтера:</b>",
+        "digest_printed": "• Напечатано за неделю: <b>%.1f ч</b> (КПД %.0f%%)",
+        "digest_reliability": "• Надежность за неделю: <b>%.0f%%</b> (%d из %d завершено)",
+        "digest_filament": "• Расход пластика: <b>%.1f м</b> (~%.1f катушек)",
+        "digest_waste": "• Потери на брак: <b>%.0f г</b> (~%.0f руб.)",
+        "digest_mats": "• По материалам: <b>%s</b>",
+        "digest_costs": "• Затраты за неделю: <b>~%.0f руб.</b> (свет ~%.0f руб., с аморт. ~%.0f руб.)",
+        "digest_mat_item": "%s: %.1f м (~%.1f кат.)",
+        "bot_started": "✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>",
+        "mode_cfs": "CFS (4 слота)",
+        "mode_single": "Одиночная катушка",
+        "axis_move_busy": "⛔ Нельзя двигать оси во время печати!",
+        "axis_move_ok": "✅ Ось %s успешно прогнана!",
+        "axis_move_err": "⚠️ Ошибка движения оси %s: %s",
+        "moving_axis": "⏳ Прогон оси %s...",
+        "reset_nozzle": "✅ Счетчик сопла сброшен (%.1f м)",
+        "reset_filter": "✅ Счетчик фильтра сброшен (%.1f ч)",
+        "reset_ptfe": "✅ Счетчик PTFE сброшен (%.1f м)",
+        "reset_cutter": "✅ Счетчик ножа сброшен (0 резов)",
+        "printer_unavailable": "⚠️ Принтер недоступен.",
+        "status_title": "📊 <b>Текущий статус:</b>",
+        "status_label": "• Статус: <b>%s</b>",
+        "status_file": "• Файл: <b>%s</b>",
+        "status_progress": "• Прогресс: <b>%.1f%%</b>",
+        "status_layer": " (слой %d из %d)",
+        "state_printing": "🖨 Печатает",
+        "state_paused": "⏸ На паузе",
+        "state_complete": "🏁 Завершена",
+        "state_standby": "💤 Ожидание",
+        "state_error": "❌ Ошибка",
+        "state_cancelled": "⏹ Отменена",
+        "state_unknown": "Неизвестно",
+        "timelapse_big": "\n🎥 <i>Таймлапс записан (%.1f МБ), но превышает лимит Telegram 50 МБ.</i>",
+        "page": "Стр. %d / %d",
+        "back": "⬅️ Назад",
+        "select_spool": "Выберите катушку:",
+        "update_applied": "✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается...",
+        "update_error": "⚠️ <b>Ошибка обновления:</b> %s",
+        "update_checking": "Updating to v%s...",
+        "update_uptodate": "Already up to date",
+        "missed_not_found": "Пропущенная печать не найдена в истории: %s",
+        "missed_processing": "Обработка пропущенного завершения: %s (статус %s)",
+        "missed_error": "Ошибка обработки пропущенного завершения",
+        "axis_error": "Ошибка движения оси %s",
+        "loop_error": "Loop error",
+        "state_migrated": "Состояние мигрировано на новую схему",
+        "unknown": "Неизвестный",
+        "not_assigned": "Не назначена",
+        "new_spool": "Новый",
+        "webapp_panel": "📱 Панель",
+        "language_ru": "🇷🇺 Русский",
+        "language_en": "🇬🇧 English",
+    },
+    "en": {
+        "menu_status": "📊 Status",
+        "menu_stats": "📈 Stats",
+        "menu_spools": "🧵 Spools",
+        "menu_cons": "🔩 Consumables",
+        "menu_maint": "🛠 Maintenance",
+        "maint_x": "↔️ Move X axis",
+        "maint_y": "↕️ Move Y axis",
+        "maint_z": "⬆️ Move Z axis (screws)",
+        "maint_reset": "🔄 Reset counters",
+        "maint_back": "⬅️ Back to menu",
+        "rst_nozzle": "Reset nozzle",
+        "rst_filter": "Reset filter",
+        "rst_ptfe": "Reset PTFE",
+        "rst_cutter": "Reset cutter",
+        "rst_back": "⬅️ Back to maintenance",
+        "print_started": "🖨 <b>Print started:</b>",
+        "print_completed": "🏁 <b>Print completed:</b>",
+        "print_paused": "⏸ <b>Print paused</b>",
+        "filament_out": "⚠️ <b>Filament out!</b>\nPrint paused.",
+        "print_error": "❌ <b>Print error:</b>",
+        "print_cancelled": "⏹ <b>Print stopped/cancelled:</b>",
+        "missed_end": "⏹ <b>Missed print completion (status: %s):</b>",
+        "file": "• File: <b>%s</b>",
+        "duration": "• Duration: <b>~%s</b>",
+        "eta": "• ETA: <b>~%s</b>",
+        "remaining": "• Remaining: <b>~%s</b>",
+        "filament_used": "• Filament: <b>~%.1f g</b>",
+        "cfs_flush": " (CFS flush: ~%.1f g)",
+        "cost_title": "💰 <b>Estimated cost:</b>",
+        "cost_direct": "• Direct (filament+electricity): <b>~%.1f RUB</b> (electricity ~%.1f RUB)",
+        "cost_depr": "• With depreciation: <b>~%.1f RUB</b> (depr. ~%.1f RUB)",
+        "spool": "• Spool: <b>%s</b> (%.0f g left)",
+        "slot": "• Slot %s: <b>%s</b> (%s%.0f g left)",
+        "slot_need": "Need ~%.1f g | ",
+        "low_filament": "⚠️ <i>Warning: not enough filament (~%.0f g short)!</i>",
+        "change_spool": "🔄 Change spool",
+        "change_slot": "🔄 Change (Slot %s)",
+        "reason": "• Reason: %s",
+        "waste_title": "🗑 <b>Waste:</b>",
+        "waste_filament": "• Filament: <b>%.1f g</b>",
+        "waste_cost": "• Cost loss: <b>~%.1f RUB</b> (with depr. ~%.1f RUB)",
+        "spool_remaining": "%s: <b>%.0f g</b> left",
+        "spool_prefix": "• Spool ",
+        "spool_tracking_off": "🧵 <b>Spool tracking disabled.</b>\nEnable it in <b>📱 Panel → Spools / Settings</b>.",
+        "spools_cfs_title": "🧵 <b>Spool inventory & CFS (%s°C | humidity %s%%):</b>",
+        "spools_cfs_current": "📦 <b>Currently in CFS:</b>",
+        "spools_cfs_empty": "• CFS slots are empty",
+        "spools_cfs_slot": "• Slot %s%s: <b>%s</b> — %.0f g",
+        "spools_cfs_slot_empty": "• Slot %s%s: <i>not assigned</i>",
+        "spools_single_title": "🧵 <b>Printer spool inventory:</b>",
+        "spools_single_current": "📦 <b>Currently loaded:</b>",
+        "spools_single_active": "• Active: <b>%s</b> — %.0f g",
+        "spools_single_none": "• No spool selected (add one below)",
+        "spools_all_title": "🗄 <b>All open spools (%d):</b>",
+        "spools_all_item": "• %s: <b>%.0f g</b>",
+        "spool_add": "➕ Add",
+        "spool_edit": "✏️ Edit",
+        "spool_refine": "🔄 Refine slot",
+        "spool_select": "🔄 Select current",
+        "spool_delete": "🗑 Delete",
+        "back_menu": "⬅️ Back to menu",
+        "new_spool_prompt": "✍️ <b>New spool:</b>\nSend type, color and weight (g).\nExample: <b>PLA Black Matte 850</b>",
+        "cancel": "❌ Cancel",
+        "edit_spool_prompt": "✏️ <b>Edit spool:</b>\nSelect from list:",
+        "edit_spool_detail": "✏️ <b>Edit %s</b> (currently %.0f g):\nSend <b>new weight</b> (e.g. <b>650</b>) or <b>new name</b> (e.g. <b>PLA Dark Green 850</b>):",
+        "refine_cfs": "🔄 <b>Refine CFS slot:</b>",
+        "select_current": "📥 <b>Select current spool:</b>",
+        "select_slot": "📥 <b>Select spool for Slot %s:</b>",
+        "spool_selected": "✅ Spool selected",
+        "slot_refined": "✅ Slot %s refined",
+        "delete_prompt": "🗑 <b>Delete spool:</b>\nSelect from list:",
+        "delete_confirm": "⚠️ <b>Are you sure you want to delete this spool?</b>\n• <b>%s</b> (%.0f g)",
+        "delete_yes": "✅ Yes, delete",
+        "deleted": "🗑 Deleted",
+        "consumables_view": "🛠 <b>Maintenance & lubrication:</b>",
+        "reset_counters": "🔄 <b>Reset counters:</b>",
+        "panel_title": "🤖 <b>Printer control panel:</b>",
+        "spool_updated": "✅ Spool <b>%s</b> (%.0f g) updated!\n",
+        "spool_added": "✅ Spool <b>%s</b> (%.0f g) added!\n",
+        "spool_format": "⚠️ Format: <b>PLA Black Matte 850</b>",
+        "cfs_humidity_warn": "💧 <b>High humidity in CFS: %d%%</b>\nTemp: %s°C\nPlease replace silica gel or enable drying.",
+        "maint_due": "🛠 <b>Printer maintenance due!</b>\nRuntime: <b>%.1f h</b>\nClean and lubricate rails/screws, check belts.",
+        "nozzle_warn": "⚠️ <b>Nozzle life exhausted!</b>\nUsage: <b>%.1f / %d m</b>.\nReset counter in Maintenance menu after replacement.",
+        "filter_warn": "🌬 <b>Replace air filter!</b>\nFilter runtime: <b>%.1f / %d h</b>.\nReset counter in Maintenance menu after replacement.",
+        "ptfe_warn": "➰ <b>Check PTFE tube!</b>\nFilament travel: <b>%.1f / %d m</b>.\nReset counter in Maintenance menu after replacement.",
+        "cutter_warn": "✂️ <b>Check filament cutter blade!</b>\nCuts performed: <b>%d / %d</b>.\nReset counter in Maintenance menu after replacement.",
+        "consumables_title": "🔩 <b>Consumables & Maintenance:</b>",
+        "consumables_maint": "• Until next maintenance: <b>~%.1f h</b>",
+        "consumables_nozzle": "• Nozzle: <b>%.1f / %d m</b>",
+        "consumables_filter": "• Filter: <b>%.1f / %d h</b>",
+        "consumables_ptfe": "• PTFE tube: <b>%.1f / %d m</b>",
+        "consumables_cutter": "• Cutter blade: <b>%d / %d cuts</b>",
+        "stats_title": "📈 <b>Printer statistics:</b>",
+        "stats_time": "• Print time: <b>%.1f h</b>",
+        "stats_filament": "• Filament used: <b>%.1f m</b> (~%.1f spools)",
+        "stats_jobs": "• Total prints: <b>%d</b>",
+        "stats_reliability": "• Reliability: <b>%.0f%%</b> (%d of %d without failures)",
+        "stats_waste": "• Waste: <b>%.0f g</b> (~%.0f RUB | %.1f%%)",
+        "stats_longest": "• Longest print: <b>%.1f h</b>",
+        "stats_avg": "• Average per print: <b>~%.1f h / ~%.0f g</b>",
+        "stats_load_title": "⏱ <b>Printer load (efficiency):</b>",
+        "stats_7d": "• Last 7 days: <b>%.1f h</b> (~%.1f h/day | efficiency %.0f%%)",
+        "stats_30d": "• Last 30 days: <b>%.1f h</b> (~%.1f h/day | efficiency %.0f%%)",
+        "stats_mats_title": "🧵 <b>Usage by material type:</b>",
+        "stats_mat_item": "• %s: <b>%.1f m</b> (~%.1f spools)",
+        "stats_costs_title": "💰 <b>Total costs:</b>",
+        "stats_costs_direct": "• Direct (filament+electricity): <b>~%.0f RUB</b> (electricity ~%.0f RUB)",
+        "stats_costs_depr": "• With depreciation: <b>~%.0f RUB</b> (depr. ~%.0f RUB)",
+        "digest_title": "📅 <b>Weekly printer digest:</b>",
+        "digest_printed": "• Printed this week: <b>%.1f h</b> (efficiency %.0f%%)",
+        "digest_reliability": "• Reliability this week: <b>%.0f%%</b> (%d of %d completed)",
+        "digest_filament": "• Filament used: <b>%.1f m</b> (~%.1f spools)",
+        "digest_waste": "• Waste: <b>%.0f g</b> (~%.0f RUB)",
+        "digest_mats": "• By material: <b>%s</b>",
+        "digest_costs": "• Weekly costs: <b>~%.0f RUB</b> (electricity ~%.0f RUB, with depr. ~%.0f RUB)",
+        "digest_mat_item": "%s: %.1f m (~%.1f spools)",
+        "bot_started": "✅ <b>Printer monitor started (v%s)</b>\nMode: <b>%s</b>",
+        "mode_cfs": "CFS (4 slots)",
+        "mode_single": "Single spool",
+        "axis_move_busy": "⛔ Cannot move axes during printing!",
+        "axis_move_ok": "✅ Axis %s moved successfully!",
+        "axis_move_err": "⚠️ Error moving axis %s: %s",
+        "moving_axis": "⏳ Moving axis %s...",
+        "reset_nozzle": "✅ Nozzle counter reset (%.1f m)",
+        "reset_filter": "✅ Filter counter reset (%.1f h)",
+        "reset_ptfe": "✅ PTFE counter reset (%.1f m)",
+        "reset_cutter": "✅ Cutter counter reset (0 cuts)",
+        "printer_unavailable": "⚠️ Printer unavailable.",
+        "status_title": "📊 <b>Current status:</b>",
+        "status_label": "• Status: <b>%s</b>",
+        "status_file": "• File: <b>%s</b>",
+        "status_progress": "• Progress: <b>%.1f%%</b>",
+        "status_layer": " (layer %d of %d)",
+        "state_printing": "🖨 Printing",
+        "state_paused": "⏸ Paused",
+        "state_complete": "🏁 Completed",
+        "state_standby": "💤 Standby",
+        "state_error": "❌ Error",
+        "state_cancelled": "⏹ Cancelled",
+        "state_unknown": "Unknown",
+        "timelapse_big": "\n🎥 <i>Timelapse recorded (%.1f MB), but exceeds Telegram 50 MB limit.</i>",
+        "page": "Page %d / %d",
+        "back": "⬅️ Back",
+        "select_spool": "Select spool:",
+        "update_applied": "✅ <b>Update applied:</b> v%s → v%s\nBot restarting...",
+        "update_error": "⚠️ <b>Update error:</b> %s",
+        "update_checking": "Updating to v%s...",
+        "update_uptodate": "Already up to date",
+        "missed_not_found": "Missed print not found in history: %s",
+        "missed_processing": "Processing missed completion: %s (status %s)",
+        "missed_error": "Error processing missed completion",
+        "axis_error": "Error moving axis %s",
+        "loop_error": "Loop error",
+        "state_migrated": "State migrated to new schema",
+        "unknown": "Unknown",
+        "not_assigned": "Not assigned",
+        "new_spool": "New",
+        "webapp_panel": "📱 Panel",
+        "language_ru": "🇷🇺 Русский",
+        "language_en": "🇬🇧 English",
+    }
+}
+
+def get_language():
+    """Возвращает текущий язык из настроек (по умолчанию 'ru')."""
+    st = load_state()
+    return (st.get("settings") or {}).get("language", "ru")
+
+def t(key, *args):
+    """Перевод строки. Если ключа нет — возвращает русский текст как fallback."""
+    lang = get_language()
+    text = LANG.get(lang, LANG["ru"]).get(key, LANG["ru"].get(key, key))
+    if args:
+        try:
+            return text % args
+        except Exception:
+            return text
+    return text
+
 
 # ==================== 1. КОНФИГУРАЦИЯ ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -88,28 +437,38 @@ if not TOKEN or not CHAT_ID:
     sys.exit(1)
 
 # ==================== 2. МЕНЮ TELEGRAM ====================
-MAIN_KB = {
-    "inline_keyboard": [
-        [{"text": "📊 Статус", "callback_data": "btn_status"}, {"text": "📈 Статистика", "callback_data": "btn_stats"}],
-        [{"text": "🧵 Катушки", "callback_data": "btn_spools"}, {"text": "🔩 Расходники", "callback_data": "btn_cons"}],
-        [{"text": "🛠 Обслуживание", "callback_data": "btn_maint"}]
-    ]
-}
-MAINT_KB = {
-    "inline_keyboard": [
-        [{"text": "↔️ Прогнать ось X", "callback_data": "move_x"}, {"text": "↕️ Прогнать ось Y", "callback_data": "move_y"}],
-        [{"text": "⬆️ Прогнать ось Z (винты)", "callback_data": "move_z"}],
-        [{"text": "🔄 Сброс счетчиков", "callback_data": "btn_resets"}],
-        [{"text": "⬅️ Назад в меню", "callback_data": "btn_back"}]
-    ]
-}
-RESET_KB = {
-    "inline_keyboard": [
-        [{"text": "Сбросить сопло", "callback_data": "rst_nozzle"}, {"text": "Сбросить фильтр", "callback_data": "rst_filter"}],
-        [{"text": "Сбросить PTFE", "callback_data": "rst_ptfe"}, {"text": "Сбросить нож", "callback_data": "rst_cutter"}],
-        [{"text": "⬅️ Назад в обслуживание", "callback_data": "btn_maint"}]
-    ]
-}
+def get_main_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": t("menu_status"), "callback_data": "btn_status"}, {"text": t("menu_stats"), "callback_data": "btn_stats"}],
+            [{"text": t("menu_spools"), "callback_data": "btn_spools"}, {"text": t("menu_cons"), "callback_data": "btn_cons"}],
+            [{"text": t("menu_maint"), "callback_data": "btn_maint"}],
+            [{"text": t("language_en"), "callback_data": "lang_en"}, {"text": t("language_ru"), "callback_data": "lang_ru"}]
+        ]
+    }
+
+def get_maint_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": t("maint_x"), "callback_data": "move_x"}, {"text": t("maint_y"), "callback_data": "move_y"}],
+            [{"text": t("maint_z"), "callback_data": "move_z"}],
+            [{"text": t("maint_reset"), "callback_data": "btn_resets"}],
+            [{"text": t("maint_back"), "callback_data": "btn_back"}]
+        ]
+    }
+
+def get_reset_kb():
+    return {
+        "inline_keyboard": [
+            [{"text": t("rst_nozzle"), "callback_data": "rst_nozzle"}, {"text": t("rst_filter"), "callback_data": "rst_filter"}],
+            [{"text": t("rst_ptfe"), "callback_data": "rst_ptfe"}, {"text": t("rst_cutter"), "callback_data": "rst_cutter"}],
+            [{"text": t("rst_back"), "callback_data": "btn_maint"}]
+        ]
+    }
+
+MAIN_KB = get_main_kb()
+MAINT_KB = get_maint_kb()
+RESET_KB = get_reset_kb()
 
 last_state = None
 last_fname = ""
@@ -584,7 +943,7 @@ def check_cfs_humidity():
             if time.time() - st.get("last_hum_warn_ts", 0) >= 86400:
                 st["last_hum_warn_ts"] = time.time()
                 save_state(st)
-                tg_send("💧 <b>Повышенная влажность в CFS: %d%%</b> (темп. %s°C)\nПора заменить силикагель или включить сушку филамента." % (hum_val, temp), MAIN_KB)
+                tg_send(t("cfs_humidity_warn", hum_val, temp), MAIN_KB)
     except Exception:
         pass
 
@@ -763,7 +1122,7 @@ def update_and_check_counters(total_hours, total_meters, add_cuts=0):
     elif total_hours - last_m >= MAINT_INTERVAL_HOURS:
         st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
         changed = True
-        tg_send("🛠 <b>Пора провести ТО принтера!</b>\nНаработка: <b>%.1f ч</b>\nОчистите и смажьте направляющие/винты, проверьте ремни." % total_hours, MAIN_KB)
+        tg_send(t("maint_due", total_hours), MAIN_KB)
     checks = [
         ("nozzle_start_meters", "nozzle_warned", total_meters, NOZZLE_LIMIT_METERS, "⚠️ <b>Ресурс сопла выработан!</b>\nПробег: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
         ("filter_start_hours", "filter_warned", total_hours, FILTER_LIMIT_HOURS, "🌬 <b>Пора заменить фильтр воздуха!</b>\nНаработка фильтра: <b>%.1f / %d ч</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
@@ -978,7 +1337,14 @@ def format_status():
     state, fname = ps.get("state", "unknown"), ps.get("filename", "")
     prog, dur = (ds.get("progress", 0) or 0) * 100, ps.get("print_duration", 0) or 0
     info = ps.get("info") or {}
-    s_map = {"printing": "🖨 Печатает", "paused": "⏸ На паузе", "complete": "🏁 Завершена", "standby": "💤 Ожидание", "error": "❌ Ошибка", "cancelled": "⏹ Отменена"}
+s_map = {
+    "printing": t("state_printing"),
+    "paused": t("state_paused"),
+    "complete": t("state_complete"),
+    "standby": t("state_standby"),
+    "error": t("state_error"),
+    "cancelled": t("state_cancelled"),
+}
     lines = ["📊 <b>Текущий статус:</b>", "• Статус: <b>%s</b>" % s_map.get(state, state)]
     if state in ("printing", "paused") and fname:
         lines.append("• Файл: <b>%s</b>" % esc(fname))
@@ -1019,7 +1385,7 @@ def _lube_worker(axis):
     try:
         st = get_print_stats()
         if st.get("print_stats", {}).get("state") in ("printing", "paused"):
-            tg_send("⛔ Нельзя двигать оси во время печати!", MAINT_KB)
+            tg_send(t("axis_move_busy"), MAINT_KB)
             return
         th = st.get("toolhead", {})
         homed = th.get("homed_axes", "")
@@ -1079,6 +1445,24 @@ def _handle_update(item):
                 pref, pg_s, b_cb = raw_pg.split("|", 2)
                 tg_answer_cb(cb_id)
                 out(msg.get("text") or "Выберите катушку:", build_spool_picker(pref, b_cb, int(pg_s)))
+        elif data == "lang_en":
+            st = load_state()
+            s = st.get("settings") or {}
+            s["language"] = "en"
+            st["settings"] = s
+            save_state(st)
+            tg_answer_cb(cb_id, "Language switched to English")
+            out(t("panel_title"), get_main_kb())
+            return
+        elif data == "lang_ru":
+            st = load_state()
+            s = st.get("settings") or {}
+            s["language"] = "ru"
+            st["settings"] = s
+            save_state(st)
+            tg_answer_cb(cb_id, "Язык изменён на русский")
+            out(t("panel_title"), get_main_kb())
+            return        
         elif data == "btn_status":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); send_usb_photo(format_status(), MAIN_KB)
         elif data == "btn_stats":
@@ -1294,6 +1678,7 @@ def build_webapp_payload():
         "single_spool_id": st.get("single_spool_id"),
         "spools": sorted([s for s in (st.get("spools") or []) if s.get("rem_g", 0) > 0], key=lambda x: x.get("id", 0)),
         "settings": {
+            "language": get_language(),
             "spool_tracking": bool(cfg("spool_tracking")),
             "timezone_offset": cfg("timezone_offset"),
             "digest_hour": cfg("digest_hour"),
@@ -1531,6 +1916,16 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
                 self._send_json(200, {"ok": True, "light_on": new_on})
+            elif path == "/api/settings/language":
+                lang = str(params.get("language", "ru")).lower()
+                if lang not in ("ru", "en"):
+                    lang = "ru"
+                st = load_state()
+                s = st.get("settings") or {}
+                s["language"] = lang
+                st["settings"] = s
+                save_state(st)
+                self._send_json(200, {"ok": True, "language": lang})
             elif path == "/api/update/check":
                 update = check_for_updates()
                 if update:

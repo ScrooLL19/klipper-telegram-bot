@@ -248,5 +248,31 @@ async function printerCmd(cmd) { await api("/api/printer/cmd", {cmd}); refresh()
 reloadCam(); refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 7000);
 </script>
+<!-- Переключатель языка -->
+<div id="lang-switcher" style="position:fixed;bottom:70px;right:15px;z-index:9999;display:flex;gap:6px;">
+  <button onclick="setLang('ru')" style="padding:8px 12px;border:none;border-radius:8px;background:#2a2a2a;color:#fff;font-size:14px;cursor:pointer;">🇷🇺 RU</button>
+  <button onclick="setLang('en')" style="padding:8px 12px;border:none;border-radius:8px;background:#2a2a2a;color:#fff;font-size:14px;cursor:pointer;">🇬🇧 EN</button>
+</div>
+
+<script>
+function setLang(lang) {
+  fetch('/api/settings/language?language=' + lang + '&key=' + (new URLSearchParams(window.location.search).get('key') || ''))
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        localStorage.setItem('printer_lang', lang);
+        location.reload();
+      }
+    });
+}
+(function() {
+  var saved = localStorage.getItem('printer_lang');
+  if (saved) {
+    document.querySelectorAll('#lang-switcher button').forEach(b => {
+      b.style.background = b.textContent.toLowerCase().includes(saved) ? '#4a90e2' : '#2a2a2a';
+    });
+  }
+})();
+</script>
 </body>
 </html>
