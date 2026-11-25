@@ -19,6 +19,7 @@
       font-size: 18px;
       font-weight: 600;
       border-bottom: 1px solid #2d3548;
+      display: none;
     }
     .tab { display: none; padding: 12px; }
     .tab.active { display: block; }
@@ -127,6 +128,9 @@
       height: 100%;
       transition: width 0.3s;
     }
+    .progress-fill.green { background: #50c878; }
+    .progress-fill.yellow { background: #f5a623; }
+    .progress-fill.red { background: #e25555; }
     .progress-text {
       font-size: 12px;
       color: #8b95a5;
@@ -153,22 +157,31 @@
       height: 24px;
       border-radius: 50%;
       border: 2px solid #fff;
+      flex-shrink: 0;
     }
     .slot-info { flex: 1; font-size: 13px; }
     .slot-info .name { font-weight: 600; }
     .slot-info .sub { font-size: 11px; color: #8b95a5; }
     .spool-item {
+      background: #1a1f2e;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 6px;
+    }
+    .spool-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 10px;
-      background: #1a1f2e;
-      border-radius: 8px;
       margin-bottom: 6px;
     }
-    .spool-item .name { font-size: 13px; }
-    .spool-item .weight { font-size: 12px; color: #8b95a5; }
-    .spool-item .actions { display: flex; gap: 4px; }
+    .spool-header .name { font-size: 13px; font-weight: 600; }
+    .spool-header .weight { font-size: 12px; color: #8b95a5; }
+    .spool-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .spool-actions .btn { padding: 6px 10px; font-size: 12px; }
     .toggle-row {
       display: flex;
       justify-content: space-between;
@@ -319,6 +332,11 @@
       padding: 30px 10px;
       color: #8b95a5;
       font-size: 14px;
+    }
+    .spool-full-weight {
+      font-size: 11px;
+      color: #8b95a5;
+      margin-top: 2px;
     }
   </style>
 </head>
@@ -529,6 +547,7 @@
       </div>
       <input type="text" id="sp-name" placeholder="Название / цвет">
       <input type="number" id="sp-weight" placeholder="Вес (г)">
+      <input type="number" id="sp-full-weight" placeholder="Полный вес катушки (г, по умолчанию 1000)">
       <div style="font-size:12px;color:#8b95a5;margin-bottom:10px" data-i18n="empty_spool_tare">⚖️ Или взвесьте с пустой катушкой:</div>
       <input type="number" id="sp-tare" placeholder="Вес пустой шпули (г)">
       <div class="actions">
@@ -538,7 +557,7 @@
     </div>
   </div>
 
-  <!-- Навигация -->
+  <!-- Навигация (только большие иконки) -->
   <div class="nav">
     <button class="active" onclick="switchTab('printer', this)"><span class="ico">📊</span><span data-i18n="tab_printer">Принтер</span></button>
     <button onclick="switchTab('spools', this)"><span class="ico">🧵</span><span data-i18n="tab_spools">Катушки</span></button>
@@ -554,6 +573,7 @@
     const API_KEY = new URLSearchParams(window.location.search).get('key') || '';
     let STATE = null;
     let currentLang = localStorage.getItem('printer_lang') || 'ru';
+    const DEFAULT_SPOOL_WEIGHT = 1000;
 
     // ==================== МУЛЬТИЯЗЫЧНОСТЬ ====================
     const I18N = {
@@ -610,12 +630,14 @@
         "save": "Сохранить",
         "empty_spool_tare": "⚖️ Или взвесьте с пустой катушкой:",
         "spool_name_ph": "Название / цвет",
-        "spool_weight_ph": "Вес (г)",
+        "spool_weight_ph": "Текущий вес (г)",
+        "spool_full_weight_ph": "Полный вес катушки (г)",
         "spool_tare_ph": "Вес пустой шпули (г)",
         "no_spools": "Катушки не добавлены",
         "no_cfs": "CFS не обнаружен",
         "not_assigned": "Не назначена",
         "g_left": "г ост.",
+        "g_full": "г из",
         "active": "активна",
         "update_available": "Доступна версия",
         "update_latest": "У вас последняя версия",
@@ -638,7 +660,16 @@
         "cancelled": "Отменена",
         "layer_of": "слой {0} из {1}",
         "remaining": "Осталось",
-        "eta": "Окончание"
+        "eta": "Окончание",
+        "stats_hours": "⏱ Время печати",
+        "stats_filament": "🧵 Расход филамента",
+        "stats_jobs": "🔢 Всего печатей",
+        "stats_reliability": "✅ Надёжность",
+        "stats_material_cost": "💰 Стоимость пластика и электроэнергии",
+        "stats_with_depr": "💰 Затраты с учётом амортизации",
+        "edit_spool": "✏️",
+        "delete_spool": "🗑",
+        "spool_full_default": "1000"
       },
       en: {
         "tab_printer": "📊 Printer",
@@ -693,12 +724,14 @@
         "save": "Save",
         "empty_spool_tare": "⚖️ Or weigh with empty spool:",
         "spool_name_ph": "Name / color",
-        "spool_weight_ph": "Weight (g)",
+        "spool_weight_ph": "Current weight (g)",
+        "spool_full_weight_ph": "Full spool weight (g)",
         "spool_tare_ph": "Empty spool weight (g)",
         "no_spools": "No spools added",
         "no_cfs": "CFS not detected",
         "not_assigned": "Not assigned",
         "g_left": "g left",
+        "g_full": "g of",
         "active": "active",
         "update_available": "Version available",
         "update_latest": "You have the latest version",
@@ -721,7 +754,16 @@
         "cancelled": "Cancelled",
         "layer_of": "layer {0} of {1}",
         "remaining": "Remaining",
-        "eta": "ETA"
+        "eta": "ETA",
+        "stats_hours": "⏱ Print time",
+        "stats_filament": "🧵 Filament used",
+        "stats_jobs": "🔢 Total prints",
+        "stats_reliability": "✅ Reliability",
+        "stats_material_cost": "💰 Filament & electricity cost",
+        "stats_with_depr": "💰 Costs with depreciation",
+        "edit_spool": "✏️",
+        "delete_spool": "🗑",
+        "spool_full_default": "1000"
       }
     };
 
@@ -858,25 +900,39 @@
       });
     }
 
+    function getSpoolFullWeight(sp) {
+      return sp.full_weight || sp.full_g || DEFAULT_SPOOL_WEIGHT;
+    }
+
+    function getSpoolProgressColor(pct) {
+      if (pct > 60) return 'green';
+      if (pct > 25) return 'yellow';
+      return 'red';
+    }
+
     function renderSpools() {
       const slots = STATE.slots || [];
       const spools = STATE.spools || [];
       const singleId = STATE.single_spool_id;
       const cfsDiv = document.getElementById('cfs-slots');
       if (STATE.has_cfs && slots.length > 0) {
-        cfsDiv.innerHTML = slots.map(s => `
+        cfsDiv.innerHTML = slots.map(s => {
+          const pct = s.rem_g > 0 ? Math.min(100, (s.rem_g / 1000) * 100) : 0;
+          const colorClass = getSpoolProgressColor(pct);
+          return `
           <div class="slot-row">
             <div class="slot-color" style="background:${s.hex}"></div>
-            <div class="slot-info">
+            <div class="slot-info" style="flex:1">
               <div class="name">Slot ${s.slot} ${s.active ? '⭐' : ''}</div>
               <div class="sub">${s.mat} · ${s.color_name}</div>
+              <div class="progress-bar" style="margin:4px 0 0 0"><div class="progress-fill ${colorClass}" style="width:${pct}%"></div></div>
             </div>
-            <div class="slot-info" style="text-align:right">
-              <div class="name">${s.spool_title}</div>
-              <div class="sub">${s.rem_g} ${t('g_left')}</div>
+            <div class="slot-info" style="text-align:right;min-width:70px">
+              <div class="name">${s.rem_g} ${t('g_left')}</div>
+              <div class="sub">${s.spool_title}</div>
             </div>
           </div>
-        `).join('');
+        `}).join('');
       } else {
         cfsDiv.innerHTML = '<div class="empty-state">' + t('no_cfs') + '</div>';
       }
@@ -884,14 +940,19 @@
       if (STATE.has_cfs) {
         const active = slots.find(s => s.active);
         if (active) {
-          activeDiv.innerHTML = '<div class="slot-row"><div class="slot-color" style="background:' + active.hex + '"></div><div class="slot-info"><div class="name">' + active.spool_title + '</div><div class="sub">' + active.mat + ' · ' + active.rem_g + ' ' + t('g_left') + '</div></div></div>';
+          const pct = active.rem_g > 0 ? Math.min(100, (active.rem_g / 1000) * 100) : 0;
+          const colorClass = getSpoolProgressColor(pct);
+          activeDiv.innerHTML = '<div class="slot-row"><div class="slot-color" style="background:' + active.hex + '"></div><div class="slot-info" style="flex:1"><div class="name">' + active.spool_title + '</div><div class="sub">' + active.mat + '</div><div class="progress-bar" style="margin:4px 0 0 0"><div class="progress-fill ' + colorClass + '" style="width:' + pct + '%"></div></div></div><div class="slot-info" style="text-align:right;min-width:70px"><div class="name">' + active.rem_g + ' ' + t('g_left') + '</div></div></div>';
         } else {
           activeDiv.innerHTML = '<div class="empty-state">' + t('not_assigned') + '</div>';
         }
       } else {
         const sp = spools.find(s => s.id === singleId);
         if (sp) {
-          activeDiv.innerHTML = '<div class="slot-row"><div class="slot-info"><div class="name">#' + sp.id + ' ' + sp.mat + ' ' + sp.name + '</div><div class="sub">' + sp.rem_g + ' ' + t('g_left') + '</div></div></div>';
+          const fullW = getSpoolFullWeight(sp);
+          const pct = sp.rem_g > 0 ? Math.min(100, (sp.rem_g / fullW) * 100) : 0;
+          const colorClass = getSpoolProgressColor(pct);
+          activeDiv.innerHTML = '<div class="slot-row"><div class="slot-info" style="flex:1"><div class="name">#' + sp.id + ' ' + sp.mat + ' ' + sp.name + '</div><div class="sub">' + sp.rem_g + ' ' + t('g_left') + ' / ' + fullW + ' ' + t('g_full') + '</div><div class="progress-bar" style="margin:4px 0 0 0"><div class="progress-fill ' + colorClass + '" style="width:' + pct + '%"></div></div></div></div>';
         } else {
           activeDiv.innerHTML = '<div class="empty-state">' + t('not_assigned') + '</div>';
         }
@@ -900,19 +961,25 @@
       if (spools.length === 0) {
         listDiv.innerHTML = '<div class="empty-state">' + t('no_spools') + '</div>';
       } else {
-        listDiv.innerHTML = spools.map(s => `
+        listDiv.innerHTML = spools.map(s => {
+          const fullW = getSpoolFullWeight(s);
+          const pct = s.rem_g > 0 ? Math.min(100, (s.rem_g / fullW) * 100) : 0;
+          const colorClass = getSpoolProgressColor(pct);
+          return `
           <div class="spool-item">
-            <div>
+            <div class="spool-header">
               <div class="name">#${s.id} ${s.mat} ${s.name}</div>
-              <div class="weight">${s.rem_g} ${t('g_left')}</div>
+              <div class="weight">${s.rem_g} ${t('g_left')} / ${fullW} ${t('g_full')}</div>
             </div>
-            <div class="actions">
+            <div class="progress-bar"><div class="progress-fill ${colorClass}" style="width:${pct}%"></div></div>
+            <div class="spool-actions" style="margin-top:8px">
               <button class="btn btn-sm" onclick="deltaSpool(${s.id}, -10)">-10</button>
               <button class="btn btn-sm" onclick="deltaSpool(${s.id}, 10)">+10</button>
-              <button class="btn btn-sm btn-danger" onclick="deleteSpool(${s.id})">✖</button>
+              <button class="btn btn-sm" onclick="openEditSpool(${s.id})">${t('edit_spool')}</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteSpool(${s.id})">${t('delete_spool')}</button>
             </div>
           </div>
-        `).join('');
+        `}).join('');
       }
     }
 
@@ -933,10 +1000,35 @@
       }
     }
 
+    let editingSpoolId = null;
+
     function openSpoolModal() {
+      editingSpoolId = null;
+      document.getElementById('sp-name').value = '';
+      document.getElementById('sp-weight').value = '';
+      document.getElementById('sp-full-weight').value = DEFAULT_SPOOL_WEIGHT;
+      document.getElementById('sp-tare').value = '';
+      document.querySelectorAll('#mat-chips .chip').forEach(c => c.classList.remove('active'));
+      document.querySelector('#mat-chips .chip[data-mat="PLA"]').classList.add('active');
       document.getElementById('sp-modal').classList.add('active');
     }
+
+    function openEditSpool(id) {
+      const sp = STATE.spools.find(s => s.id === id);
+      if (!sp) return;
+      editingSpoolId = id;
+      document.getElementById('sp-name').value = sp.name || '';
+      document.getElementById('sp-weight').value = sp.rem_g || '';
+      document.getElementById('sp-full-weight').value = getSpoolFullWeight(sp);
+      document.getElementById('sp-tare').value = sp.tare || '';
+      document.querySelectorAll('#mat-chips .chip').forEach(c => {
+        c.classList.toggle('active', c.getAttribute('data-mat') === sp.mat);
+      });
+      document.getElementById('sp-modal').classList.add('active');
+    }
+
     function closeSpoolModal() {
+      editingSpoolId = null;
       document.getElementById('sp-modal').classList.remove('active');
     }
 
@@ -952,7 +1044,11 @@
     function saveSpool() {
       const name = document.getElementById('sp-name').value.trim();
       const weight = parseFloat(document.getElementById('sp-weight').value) || 1000;
-      apiPost('/api/spool/save', { mat: selectedMat, name: name, rem_g: weight }).then(() => {
+      const fullWeight = parseFloat(document.getElementById('sp-full-weight').value) || DEFAULT_SPOOL_WEIGHT;
+      const tare = parseFloat(document.getElementById('sp-tare').value) || 0;
+      const body = { mat: selectedMat, name: name, rem_g: weight, full_weight: fullWeight, tare: tare };
+      if (editingSpoolId) body.id = editingSpoolId;
+      apiPost('/api/spool/save', body).then(() => {
         closeSpoolModal();
         loadState();
         if (tg && tg.showAlert) tg.showAlert(t('spool_saved'));
@@ -963,11 +1059,11 @@
       const s = STATE.stats || {};
       const sumDiv = document.getElementById('stats-summary');
       sumDiv.innerHTML = `
-        <div class="stat-row"><span>${t('stats_summary')}</span><span class="val">${s.hours} ч</span></div>
-        <div class="stat-row"><span>🧵 ${s.meters} м</span><span class="val">~${s.spools_cnt} кат.</span></div>
-        <div class="stat-row"><span>🔢 ${s.jobs}</span><span class="val">${s.reliability}%</span></div>
-        <div class="stat-row"><span>💰 ${t('tariffs_title')}</span><span class="val">${s.direct_rub} ₽</span></div>
-        <div class="stat-row"><span>📉 ${t('tariffs_depr')}</span><span class="val">${s.full_rub} ₽</span></div>
+        <div class="stat-row"><span>${t('stats_hours')}</span><span class="val">${s.hours} ч</span></div>
+        <div class="stat-row"><span>${t('stats_filament')}</span><span class="val">${s.meters} м (~${s.spools_cnt} кат.)</span></div>
+        <div class="stat-row"><span>${t('stats_jobs')}</span><span class="val">${s.jobs} (${s.reliability}%)</span></div>
+        <div class="stat-row"><span>${t('stats_material_cost')}</span><span class="val">${s.direct_rub} ₽</span></div>
+        <div class="stat-row"><span>${t('stats_with_depr')}</span><span class="val">${s.full_rub} ₽</span></div>
       `;
       renderDonut(s.materials || {});
       renderBarChart(s.days_labels || [], s.days_hours || []);
