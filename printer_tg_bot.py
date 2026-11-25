@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 
 # ==================== STATE CACHE ====================
 state_lock = threading.Lock()
@@ -1962,6 +1962,18 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 s["language"] = lang
                 st["settings"] = s
                 save_state(st)
+                    # Пересчитываем глобальные кнопки на новом языке
+                global MAIN_KB, MAINT_KB, RESET_KB
+                MAIN_KB = get_main_kb()
+                MAINT_KB = get_maint_kb()
+                RESET_KB = get_reset_kb()
+                # Отправляем сообщение в Telegram
+                lang_msg = "🌐 Language switched to English" if lang == "en" else "🌐 Язык изменён на русский"
+                try:
+                    tg_send(lang_msg, MAIN_KB)
+                    log.info("🌐 Language switched to: %s, message sent", lang)
+                except Exception as e:
+                    log.warning("Failed to send language switch message: %s", e)
                 self._send_json(200, {"ok": True, "language": lang})
             elif path == "/api/update/check":
                 update = check_for_updates()
