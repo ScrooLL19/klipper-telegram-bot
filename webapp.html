@@ -578,11 +578,11 @@
     // ==================== МУЛЬТИЯЗЫЧНОСТЬ ====================
     const I18N = {
       ru: {
-        "tab_printer": "Принтер",
-        "tab_spools": "Катушки",
-        "tab_stats": "Графики",
-        "tab_maint": "ТО",
-        "tab_settings": "Настройки",
+        "tab_printer": "📊 Принтер",
+        "tab_spools": "🧵 Катушки",
+        "tab_stats": "📈 Графики",
+        "tab_maint": "🔩 ТО",
+        "tab_settings": "⚙️ Настройки",
         "cam_title": "📷 Камера принтера",
         "light_btn": "💡 Свет",
         "nozzle_label": "🌡 Сопло",
@@ -672,11 +672,11 @@
         "spool_full_default": "1000"
       },
       en: {
-        "tab_printer": "Printer",
-        "tab_spools": "Spools",
-        "tab_stats": "Stats",
-        "tab_maint": "Maint.",
-        "tab_settings": "⚙Settings",
+        "tab_printer": "📊 Printer",
+        "tab_spools": "🧵 Spools",
+        "tab_stats": "📈 Stats",
+        "tab_maint": "🔩 Maint.",
+        "tab_settings": "⚙️ Settings",
         "cam_title": "📷 Printer camera",
         "light_btn": "💡 Light",
         "nozzle_label": "🌡 Nozzle",
@@ -1062,7 +1062,7 @@
         <div class="stat-row"><span>${t('stats_hours')}</span><span class="val">${s.hours} ч</span></div>
         <div class="stat-row"><span>${t('stats_filament')}</span><span class="val">${s.meters} м (~${s.spools_cnt} кат.)</span></div>
         <div class="stat-row"><span>${t('stats_jobs')}</span><span class="val">${s.jobs} (${s.reliability}%)</span></div>
-        <div class="stat-row"><span>${t('stats_material_cost')}</span><span class="val">${s.direct_rub} ₽</span></div>
+        <div class="stat-row"><span>${t('stats_material_cost')}</span><span class="val">${s.direct_rub} ₽ (свет ~${s.elec_rub} ₽)</span></div>
         <div class="stat-row"><span>${t('stats_with_depr')}</span><span class="val">${s.full_rub} ₽</span></div>
       `;
       renderDonut(s.materials || {});
