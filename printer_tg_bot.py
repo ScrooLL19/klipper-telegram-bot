@@ -1336,14 +1336,14 @@ def format_status():
     state, fname = ps.get("state", "unknown"), ps.get("filename", "")
     prog, dur = (ds.get("progress", 0) or 0) * 100, ps.get("print_duration", 0) or 0
     info = ps.get("info") or {}
-s_map = {
-    "printing": t("state_printing"),
-    "paused": t("state_paused"),
-    "complete": t("state_complete"),
-    "standby": t("state_standby"),
-    "error": t("state_error"),
-    "cancelled": t("state_cancelled"),
-}
+    s_map = {
+        "printing": t("state_printing"),
+        "paused": t("state_paused"),
+        "complete": t("state_complete"),
+        "standby": t("state_standby"),
+        "error": t("state_error"),
+        "cancelled": t("state_cancelled"),
+    }
     lines = ["📊 <b>Текущий статус:</b>", "• Статус: <b>%s</b>" % s_map.get(state, state)]
     if state in ("printing", "paused") and fname:
         lines.append("• Файл: <b>%s</b>" % esc(fname))
