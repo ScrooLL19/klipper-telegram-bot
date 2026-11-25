@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 # ==================== STATE CACHE ====================
 state_lock = threading.Lock()
@@ -466,8 +466,7 @@ def get_welcome_kb():
         "inline_keyboard": [
             [{"text": t("menu_status"), "callback_data": "btn_status"}, {"text": t("menu_stats"), "callback_data": "btn_stats"}],
             [{"text": t("menu_spools"), "callback_data": "btn_spools"}, {"text": t("menu_cons"), "callback_data": "btn_cons"}],
-            [{"text": t("menu_maint"), "callback_data": "btn_maint"}],
-            [{"text": t("language_en"), "callback_data": "lang_en"}, {"text": t("language_ru"), "callback_data": "lang_ru"}]
+            [{"text": t("menu_maint"), "callback_data": "btn_maint"}]
         ]
     }
 
