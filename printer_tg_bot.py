@@ -8,7 +8,23 @@ from logging.handlers import RotatingFileHandler
 
 VERSION = "1.0.3"
 
+# ==================== STATE CACHE ====================
+state_lock = threading.Lock()
+def load_state():
+    with state_lock:
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r") as f: return json.load(f)
+            except Exception: pass
+        return {}
 
+def save_state(data):
+    with state_lock:
+        try:
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w") as f: json.dump(data, f)
+            os.replace(tmp, STATE_FILE)
+        except Exception: pass
 # ==================== МУЛЬТИЯЗЫЧНОСТЬ (RU / EN) ====================
 LANG = {
     "ru": {
@@ -764,23 +780,7 @@ def calc_costs(meta, duration_sec=0, used_mm=0):
     return w, direct, direct + depr, elec, depr
 
 # ==================== 5. УЧЕТ КАТУШЕК ====================
-state_lock = threading.Lock()
 
-def load_state():
-    with state_lock:
-        if os.path.exists(STATE_FILE):
-            try:
-                with open(STATE_FILE, "r") as f: return json.load(f)
-            except Exception: pass
-        return {}
-
-def save_state(data):
-    with state_lock:
-        try:
-            tmp = STATE_FILE + ".tmp"
-            with open(tmp, "w") as f: json.dump(data, f)
-            os.replace(tmp, STATE_FILE)
-        except Exception: pass
 
 def cfg(key):
     st = load_state()
