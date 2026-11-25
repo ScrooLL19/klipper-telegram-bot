@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import json, os, sys, time, uuid, threading, urllib.request, urllib.parse, logging, configparser, py_compile
+import json, os, sys, time, uuid, threading, urllib.request, urllib.parse, logging, configparser, py_compile, fcntl
 import hmac, hashlib, subprocess, re
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,25 +8,12 @@ from logging.handlers import RotatingFileHandler
 
 VERSION = "1.0.2"
 
-# ==================== 1. ШПАРГАЛКА ПО КОМАНДАМ ====================
-# Папка проекта на принтере:             /root/printer_tg_bot/
-# Скрипт:                                /root/printer_tg_bot/printer_tg_bot.py
-# База данных (катушки, ТО, статистика): /root/printer_tg_bot/printer_state.json
-# Лог ошибок:                            /root/printer_tg_bot/printer_tg_bot.log
-#
-# Перезапустить (Creality K1/K2):   /etc/init.d/printer_tg_bot restart
-# Перезапустить (Mainsail/Fluidd):  sudo systemctl restart printer_tg_bot
-# Проверить процесс в памяти:       ps w | grep printer_tg_bot
-# Тестовый запуск в консоли:        python3 /root/printer_tg_bot/printer_tg_bot.py
-# ===================================================================
-
-# ==================== 2. НАСТРОЙКИ СКРИПТА ========================
+# ==================== 1. КОНФИГУРАЦИЯ ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.ini")
 SECRETS_FILE = os.path.join(BASE_DIR, "secrets.ini")
 STATE_FILE = os.path.join(BASE_DIR, "printer_state.json")
 
-# Дефолтные значения (как в оригинале, служат fallback'ом)
 TOKEN = ""
 CHAT_ID = "210754903"
 MOONRAKER = "http://localhost:7125"
@@ -60,12 +47,10 @@ USE_CLOUDFLARED = True
 WEBAPP_PORT = 8088
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
 
-# Попытка загрузить конфиги (если они созданы установщиком, они перезапишут дефолты)
 if os.path.exists(SECRETS_FILE) or os.path.exists(CONFIG_FILE):
     config = configparser.ConfigParser()
     config.read(CONFIG_FILE)
     config.read(SECRETS_FILE)
-    
     if config.has_option("telegram", "token"): TOKEN = config.get("telegram", "token")
     if config.has_option("telegram", "chat_id"): CHAT_ID = config.get("telegram", "chat_id")
     if config.has_option("printer", "moonraker_url"): MOONRAKER = config.get("printer", "moonraker_url")
@@ -91,7 +76,6 @@ TIMELAPSE_DIR = ""
 CAM_SNAPSHOT_URL = ""
 HAS_CFS = False
 
-# Логирование с ротацией (защита флеш-памяти)
 log = logging.getLogger("printer_tg_bot")
 log.setLevel(logging.INFO)
 _handler = RotatingFileHandler(os.path.join(BASE_DIR, "printer_tg_bot.log"), maxBytes=5*1024*1024, backupCount=3)
@@ -103,7 +87,7 @@ if not TOKEN or not CHAT_ID:
     print("ERROR: token or chat_id missing! Check secrets.ini")
     sys.exit(1)
 
-# ==================== 3. МЕНЮ И КНОПКИ TELEGRAM ====================
+# ==================== 2. МЕНЮ TELEGRAM ====================
 MAIN_KB = {
     "inline_keyboard": [
         [{"text": "📊 Статус", "callback_data": "btn_status"}, {"text": "📈 Статистика", "callback_data": "btn_stats"}],
@@ -135,23 +119,18 @@ edit_spool_id = None
 print_start_files = set()
 last_cam_fail_ts = 0.0
 
-# ==================== 4. TELEGRAM: ТЕКСТ, ФОТО И ВИДЕО =============
+# ==================== 3. TELEGRAM API ====================
 def tg_api(method, payload, timeout=15):
     url = "https://api.telegram.org/bot%s/%s" % (TOKEN, method)
     if "reply_markup" in payload and payload["reply_markup"]:
         payload["reply_markup"] = json.dumps(payload["reply_markup"])
     data = urllib.parse.urlencode(payload).encode()
-    last_err = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except Exception as e:
-            last_err = e
-            if attempt < 2:
-                time.sleep(3)
-    log.warning("Telegram API error (%s): %s", method, last_err)
-    return {}
+    try:
+        with urllib.request.urlopen(url, data=data, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:
+        log.warning("Telegram API error (%s): %s", method, e)
+        return {}
 
 def tg_send(text, kb=None):
     p = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -271,7 +250,7 @@ def send_timelapse_async(caption, kb=None):
     print_start_files.clear()
     threading.Thread(target=_timelapse_worker, args=(caption, kb, exclude_files), daemon=True).start()
 
-# ==================== 5. MOONRAKER API, АВТОПОИСК ПУТЕЙ И ЦЕН ======
+# ==================== 4. MOONRAKER API ====================
 def moonraker_get(path, timeout=8):
     try:
         with urllib.request.urlopen(MOONRAKER + path, timeout=timeout) as r:
@@ -426,7 +405,7 @@ def calc_costs(meta, duration_sec=0, used_mm=0):
     depr = h * DEPRECIATION_PER_HOUR
     return w, direct, direct + depr, elec, depr
 
-# ==================== 6. УЧЕТ КАТУШЕК (CFS И ОДИНОЧНАЯ КАТУШКА) ===
+# ==================== 5. УЧЕТ КАТУШЕК ====================
 state_lock = threading.Lock()
 
 def load_state():
@@ -475,28 +454,28 @@ def cfg_price(mat):
 COLOR_PALETTE = (
     ((228, 238, 155), "Светло-желтый", "Желтый"),
     ((252, 130, 115), "Коралловый", "Розовый"),
-    ((15, 105, 250),  "Синий", "Синий"),
-    ((85, 235, 95),   "Салатовый", "Салатовый"),
-    ((240, 125, 40),  "Оранжевый", "Оранжевый"),
-    ((255, 20, 15),   "Красный", "Красный"),
+    ((15, 105, 250), "Синий", "Синий"),
+    ((85, 235, 95), "Салатовый", "Салатовый"),
+    ((240, 125, 40), "Оранжевый", "Оранжевый"),
+    ((255, 20, 15), "Красный", "Красный"),
     ((245, 245, 245), "Белый", "Белый"),
     ((195, 210, 225), "Серый", "Серый"),
-    ((155, 65, 240),  "Фиолетовый", "Фиолетовый"),
-    ((10, 195, 255),  "Голубой", "Голубой"),
-    ((15, 235, 210),  "Бирюзовый", "Бирюзовый"),
+    ((155, 65, 240), "Фиолетовый", "Фиолетовый"),
+    ((10, 195, 255), "Голубой", "Голубой"),
+    ((15, 235, 210), "Бирюзовый", "Бирюзовый"),
     ((245, 190, 235), "Светло-розовый", "Розовый"),
-    ((255, 165, 10),  "Оранжевый", "Оранжевый"),
-    ((15, 30, 235),   "Темно-синий", "Синий"),
-    ((22, 24, 30),    "Черный", "Черный"),
+    ((255, 165, 10), "Оранжевый", "Оранжевый"),
+    ((15, 30, 235), "Темно-синий", "Синий"),
+    ((22, 24, 30), "Черный", "Черный"),
     ((110, 175, 240), "Голубой", "Голубой"),
-    ((25, 145, 250),  "Синий", "Синий"),
-    ((65, 185, 45),   "Зеленый", "Зеленый"),
-    ((10, 235, 115),  "Зеленый", "Зеленый"),
-    ((240, 55, 235),  "Розовый", "Розовый"),
-    ((235, 245, 20),  "Желтый", "Желтый"),
+    ((25, 145, 250), "Синий", "Синий"),
+    ((65, 185, 45), "Зеленый", "Зеленый"),
+    ((10, 235, 115), "Зеленый", "Зеленый"),
+    ((240, 55, 235), "Розовый", "Розовый"),
+    ((235, 245, 20), "Желтый", "Желтый"),
     ((205, 195, 245), "Сиреневый", "Фиолетовый"),
-    ((65, 35, 245),   "Фиолетовый", "Фиолетовый"),
-    ((250, 205, 15),  "Желтый", "Желтый"),
+    ((65, 35, 245), "Фиолетовый", "Фиолетовый"),
+    ((250, 205, 15), "Желтый", "Желтый"),
 )
 
 def _nearest_palette(raw_hex):
@@ -741,7 +720,7 @@ def build_spool_picker(prefix, back_cb, page=0, pref_mat=None):
     rows.append([{"text": "⬅️ Назад", "callback_data": back_cb}])
     return {"inline_keyboard": rows}
 
-# ==================== 7. СЧЕТЧИКИ РАСХОДНИКОВ, МАТЕРИАЛОВ И БРАКА ==
+# ==================== 6. СЧЕТЧИКИ РАСХОДНИКОВ ====================
 def detect_material_types(meta, fname=""):
     raw = str(meta.get("filament_type", "") or "").strip().upper()
     if raw:
@@ -815,7 +794,7 @@ def update_counters(cuts=0):
             totals.get("total_filament_used", 0) / 1000.0,
             cuts)
 
-# ==================== 8. ОТЧЕТЫ: РАСХОДНИКИ, СТАТИСТИКА, ДАЙДЖЕСТ ==
+# ==================== 7. ОТЧЕТЫ ====================
 def analyze_history(history):
     now_ts = time.time()
     sec_7d, sec_30d, mm_7d, jobs_7d, ok_7d, ok_all = 0.0, 0.0, 0.0, 0, 0, 0
@@ -933,7 +912,7 @@ def check_weekly_digest():
         lines.append("• Затраты за неделю: <b>~%.0f руб.</b> (свет ~%.0f руб., с аморт. ~%.0f руб.)" % (direct, elec, full))
         tg_send("\n".join(lines), MAIN_KB)
 
-# ==================== 9. ЗАВЕРШЕНИЕ ПЕЧАТИ (ОБЩАЯ ЛОГИКА) ==========
+# ==================== 8. ЗАВЕРШЕНИЕ ПЕЧАТИ ====================
 def process_completed_job(fname, meta, print_dur, used_mm, send_video=True):
     w, direct, full, elec, depr = calc_costs(meta, print_dur, used_mm)
     flush_g = get_flush_weight(meta)
@@ -987,7 +966,7 @@ def handle_missed_job_end(old_fname):
     except Exception:
         log.exception("Ошибка обработки пропущенного завершения")
 
-# ==================== 10. СТАТУС, ОБСЛУЖИВАНИЕ И ДВИЖЕНИЕ ОСЕЙ ====
+# ==================== 9. СТАТУС И ОБСЛУЖИВАНИЕ ====================
 def format_dur(sec):
     h, m = int(sec // 3600), int((sec % 3600) // 60)
     return "%d ч %d мин" % (h, m) if h > 0 else "%d мин" % m
@@ -1065,14 +1044,13 @@ def _lube_worker(axis):
         log.exception("Ошибка движения оси %s", axis.upper())
         tg_send("⚠️ Ошибка движения оси %s: %s" % (axis.upper(), e), MAINT_KB)
 
-# ==================== 11. ОБРАБОТКА КОМАНД И КНОПОК ================
+# ==================== 10. ОБРАБОТКА КОМАНД (ОТДЕЛЬНЫЙ ПОТОК) ====================
 def check_commands():
     global last_update_id
     while True:
         try:
             res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25}, timeout=30).get("result", [])
             if not isinstance(res, list) or not res:
-                # Пусто или ошибка (409/DNS) — пауза, чтобы не долбить API
                 time.sleep(5)
                 continue
             for item in res:
@@ -1083,7 +1061,7 @@ def check_commands():
                     log.exception("Ошибка обработки апдейта %s", item.get("update_id"))
         except Exception:
             log.exception("Ошибка в цикле check_commands")
-            time.sleep(10)
+            time.sleep(5)
 
 def _handle_update(item):
     global awaiting_spool, edit_spool_id
@@ -1222,7 +1200,7 @@ def _handle_update(item):
     elif txt.startswith("/spools"): t, kb = build_spools_view(); tg_send(t, kb)
     elif txt.startswith(("/start", "/help")): awaiting_spool = False; edit_spool_id = None; tg_send("🤖 <b>Панель управления принтером:</b>", MAIN_KB)
 
-# ==================== 12. ВЕБ-СЕРВЕР MINI APP, ТУННЕЛЬ И OTA =======
+# ==================== 11. WEB-СЕРВЕР MINI APP ====================
 WEBAPP_FILE = os.path.join(BASE_DIR, "webapp.html")
 CLOUDFLARED_BIN = os.path.join(BASE_DIR, "cloudflared")
 PUBLIC_WEBAPP_URL = ""
@@ -1239,7 +1217,6 @@ def _get_cached_stats():
     now_local = datetime.now(timezone.utc) + timedelta(hours=tz)
     days_labels, days_hours = [], []
     day_names = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
-    # FIX: используем offset-aware epoch для корректного вычитания
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     for shift in range(6, -1, -1):
         d_dt = now_local - timedelta(days=shift)
@@ -1362,7 +1339,6 @@ def build_webapp_payload():
         }
     }
 
-# --- OTA Update Logic ---
 def check_for_updates():
     try:
         url = "%s/printer_tg_bot.py?v=%s" % (GITHUB_RAW_BASE, VERSION)
@@ -1372,7 +1348,6 @@ def check_for_updates():
         if not m:
             return None
         new_version = m.group(1)
-        # FIX: сравниваем версии как кортежи чисел, чтобы не обновляться "вниз"
         def parse_version(v):
             try:
                 return [int(x) for x in v.lstrip("v").split(".")]
@@ -1396,7 +1371,6 @@ def apply_update(update_info):
         with open(new_path, "w", encoding="utf-8") as f:
             f.write(update_info["code"])
         py_compile.compile(new_path, doraise=True)
-        
         try:
             html_url = "%s/webapp.html?v=%s" % (GITHUB_RAW_BASE, update_info["version"])
             with urllib.request.urlopen(html_url, timeout=15) as r:
@@ -1406,11 +1380,9 @@ def apply_update(update_info):
                 f.write(html_code)
         except Exception as e:
             log.warning("Не удалось скачать webapp.html: %s", e)
-        
         os.replace(new_path, os.path.join(BASE_DIR, "printer_tg_bot.py"))
         if os.path.exists(html_path):
             os.replace(html_path, WEBAPP_FILE)
-        
         log.info("Обновление применено: %s -> %s. Перезапуск...", VERSION, update_info["version"])
         tg_send("✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается..." % (VERSION, update_info["version"]), MAIN_KB)
         os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -1419,8 +1391,9 @@ def apply_update(update_info):
         tg_send("⚠️ <b>Ошибка обновления:</b> %s" % str(e), MAIN_KB)
 
 class WebAppHandler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args): pass
-    
+    def log_message(self, fmt, *args):
+        pass
+
     def _send_json(self, code, obj):
         raw = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -1429,160 +1402,170 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
-        
+
     def _check_auth(self, params):
         ref = (self.headers.get("Referer") or "") + (self.headers.get("Origin") or "")
-        if WEBAPP_SECRET and params.get("key") == WEBAPP_SECRET: return True
-        if "trycloudflare.com" in ref: return True
+        if WEBAPP_SECRET and params.get("key") == WEBAPP_SECRET:
+            return True
+        if "trycloudflare.com" in ref:
+            return True
         return verify_tg_init_data(params.get("initData", ""))
-        
-def _handle_api(self, path, params):
-    try:
-        if path == "/api/state":
-            self._send_json(200, build_webapp_payload())
-        elif path == "/api/spool/delta":
-            sid = int(params.get("id", 0))
-            delta = float(params.get("delta", 0))
-            st = load_state()
-            for s in (st.get("spools") or []):
-                if s.get("id") == sid:
-                    s["rem_g"] = round(max(0.0, s.get("rem_g", 0) + delta), 1)
-                    break
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/settings/save":
-            st = load_state()
-            s = st.get("settings") or {}
-            if "spool_tracking" in params:
-                s["spool_tracking"] = str(params["spool_tracking"]).lower() in ("1", "true", "yes")
-            for k, cast in (
-                ("timezone_offset", int), ("digest_hour", int), ("maint_hours", float),
-                ("nozzle_meters", float), ("filter_hours", float), ("ptfe_meters", float),
-                ("cutter_cuts", int), ("cfs_humidity", int), ("elec_price", float),
-                ("power_kw", float), ("depr_hour", float)
-            ):
-                if k in params and str(params[k]) != "":
-                    s[k] = cast(params[k])
-            if "prices_json" in params and params["prices_json"]:
-                try:
-                    s["prices"] = json.loads(params["prices_json"])
-                except Exception:
-                    pass
-            st["settings"] = s
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/spool/save":
-            st = load_state()
-            spools = st.get("spools") or []
-            sid = params.get("id")
-            mat = str(params.get("mat") or "PLA").strip().upper()
-            nm = str(params.get("name") or "").strip()
-            if nm: nm = nm[:1].upper() + nm[1:]
-            grams = round(max(0.0, float(params.get("rem_g", 1000))), 1)
-            if sid:
-                for s in spools:
-                    if s.get("id") == int(sid):
-                        s["mat"] = mat
-                        if nm:
-                            s["name"] = nm
-                            s["group"] = normalize_color_group(nm)
-                        s["rem_g"] = grams
+
+    def _handle_api(self, path, params):
+        try:
+            if path == "/api/state":
+                self._send_json(200, build_webapp_payload())
+            elif path == "/api/spool/delta":
+                sid = int(params.get("id", 0))
+                delta = float(params.get("delta", 0))
+                st = load_state()
+                for s in (st.get("spools") or []):
+                    if s.get("id") == sid:
+                        s["rem_g"] = round(max(0.0, s.get("rem_g", 0) + delta), 1)
+                        break
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/settings/save":
+                st = load_state()
+                s = st.get("settings") or {}
+                if "spool_tracking" in params:
+                    s["spool_tracking"] = str(params["spool_tracking"]).lower() in ("1", "true", "yes")
+                for k, cast in (
+                    ("timezone_offset", int), ("digest_hour", int), ("maint_hours", float),
+                    ("nozzle_meters", float), ("filter_hours", float), ("ptfe_meters", float),
+                    ("cutter_cuts", int), ("cfs_humidity", int), ("elec_price", float),
+                    ("power_kw", float), ("depr_hour", float)
+                ):
+                    if k in params and str(params[k]) != "":
+                        s[k] = cast(params[k])
+                if "prices_json" in params and params["prices_json"]:
+                    try:
+                        s["prices"] = json.loads(params["prices_json"])
+                    except Exception:
+                        pass
+                st["settings"] = s
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/spool/save":
+                st = load_state()
+                spools = st.get("spools") or []
+                sid = params.get("id")
+                mat = str(params.get("mat") or "PLA").strip().upper()
+                nm = str(params.get("name") or "").strip()
+                if nm: nm = nm[:1].upper() + nm[1:]
+                grams = round(max(0.0, float(params.get("rem_g", 1000))), 1)
+                if sid:
+                    for s in spools:
+                        if s.get("id") == int(sid):
+                            s["mat"] = mat
+                            if nm:
+                                s["name"] = nm
+                                s["group"] = normalize_color_group(nm)
+                            s["rem_g"] = grams
+                else:
+                    nid = max([s.get("id", 0) for s in spools], default=0) + 1
+                    spools.append({"id": nid, "mat": mat, "name": nm or "Новый", "group": normalize_color_group(nm), "hex": "", "rem_g": grams})
+                st["spools"] = spools
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/spool/delete":
+                sid = int(params.get("id", 0))
+                st = load_state()
+                st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
+                ov = st.get("slot_overrides") or {}
+                for k in [k for k, v in ov.items() if v.get("id") == sid]: del ov[k]
+                st["slot_overrides"] = ov
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/slot/assign":
+                let = str(params.get("slot") or "")
+                sid = int(params.get("spool_id", 0))
+                st = load_state()
+                if let == "SINGLE":
+                    st["single_spool_id"] = sid
+                else:
+                    slots, _, _, _ = get_cfs_slots()
+                    if let in slots:
+                        ov = st.get("slot_overrides") or {}
+                        ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
+                        st["slot_overrides"] = ov
+                save_state(st)
+                self._send_json(200, {"ok": True})
+            elif path == "/api/reset":
+                do_reset(str(params.get("target") or ""))
+                self._send_json(200, {"ok": True})
+            elif path == "/api/move":
+                ax = str(params.get("axis") or "")
+                if ax in ("x", "y", "z"):
+                    threading.Thread(target=_lube_worker, args=(ax,), daemon=True).start()
+                self._send_json(200, {"ok": True})
+            elif path == "/api/printer/cmd":
+                cmd = str(params.get("cmd") or "")
+                ep = {"pause": "/printer/print/pause", "resume": "/printer/print/resume", "cancel": "/printer/print/cancel"}.get(cmd)
+                if ep:
+                    try:
+                        urllib.request.urlopen(MOONRAKER + ep, data=b"", timeout=5).close()
+                    except Exception:
+                        pass
+                self._send_json(200, {"ok": True})
+            elif path == "/api/light/toggle":
+                st = load_state()
+                cur_on = bool(st.get("light_on", False))
+                new_on = not cur_on
+                st["light_on"] = new_on
+                save_state(st)
+                val = 1 if new_on else 0
+                objs = moonraker_get("/printer/objects/list", 4).get("objects") or []
+                cmds = []
+                for o in objs:
+                    ol = o.lower()
+                    if (o.startswith("output_pin ") or o.startswith("led ")) and any(k in ol for k in ("light", "led", "lamp", "caselight")):
+                        pin_name = o.split(" ", 1).pop()
+                        if o.startswith("output_pin "):
+                            cmds.append("SET_PIN PIN=%s VALUE=%d" % (pin_name, val))
+                        else:
+                            cmds.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d" % (pin_name, val, val, val, val))
+                if cmds:
+                    try:
+                        urllib.request.urlopen(MOONRAKER + "/printer/gcode/script", data=urllib.parse.urlencode({"script": "\n".join(cmds)}).encode(), timeout=5).close()
+                    except Exception:
+                        pass
+                self._send_json(200, {"ok": True, "light_on": new_on})
+            elif path == "/api/update/check":
+                update = check_for_updates()
+                if update:
+                    self._send_json(200, {"ok": True, "has_update": True, "new_version": update["version"]})
+                else:
+                    self._send_json(200, {"ok": True, "has_update": False, "current_version": VERSION})
+            elif path == "/api/update/apply":
+                update = check_for_updates()
+                if update:
+                    threading.Thread(target=apply_update, args=(update,), daemon=True).start()
+                    self._send_json(200, {"ok": True, "message": "Updating to v%s..." % update["version"]})
+                else:
+                    self._send_json(200, {"ok": True, "message": "Already up to date"})
             else:
-                nid = max([s.get("id", 0) for s in spools], default=0) + 1
-                spools.append({"id": nid, "mat": mat, "name": nm or "Новый", "group": normalize_color_group(nm), "hex": "", "rem_g": grams})
-            st["spools"] = spools
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/spool/delete":
-            sid = int(params.get("id", 0))
-            st = load_state()
-            st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
-            ov = st.get("slot_overrides") or {}
-            for k in [k for k, v in ov.items() if v.get("id") == sid]: del ov[k]
-            st["slot_overrides"] = ov
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/slot/assign":
-            let = str(params.get("slot") or "")
-            sid = int(params.get("spool_id", 0))
-            st = load_state()
-            if let == "SINGLE":
-                st["single_spool_id"] = sid
-            else:
-                slots, _, _, _ = get_cfs_slots()
-                if let in slots:
-                    ov = st.get("slot_overrides") or {}
-                    ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
-                    st["slot_overrides"] = ov
-            save_state(st)
-            self._send_json(200, {"ok": True})
-        elif path == "/api/reset":
-            do_reset(str(params.get("target") or ""))
-            self._send_json(200, {"ok": True})
-        elif path == "/api/move":
-            ax = str(params.get("axis") or "")
-            if ax in ("x", "y", "z"):
-                threading.Thread(target=_lube_worker, args=(ax,), daemon=True).start()
-            self._send_json(200, {"ok": True})
-        elif path == "/api/printer/cmd":
-            cmd = str(params.get("cmd") or "")
-            ep = {"pause": "/printer/print/pause", "resume": "/printer/print/resume", "cancel": "/printer/print/cancel"}.get(cmd)
-            if ep:
-                try:
-                    urllib.request.urlopen(MOONRAKER + ep, data=b"", timeout=5).close()
-                except Exception:
-                    pass
-            self._send_json(200, {"ok": True})
-        elif path == "/api/light/toggle":
-            st = load_state()
-            cur_on = bool(st.get("light_on", False))
-            new_on = not cur_on
-            st["light_on"] = new_on
-            save_state(st)
-            val = 1 if new_on else 0
-            objs = moonraker_get("/printer/objects/list", 4).get("objects") or []
-            cmds = []
-            for o in objs:
-                ol = o.lower()
-                if (o.startswith("output_pin ") or o.startswith("led ")) and any(k in ol for k in ("light", "led", "lamp", "caselight")):
-                    pin_name = o.split(" ", 1).pop()
-                    if o.startswith("output_pin "):
-                        cmds.append("SET_PIN PIN=%s VALUE=%d" % (pin_name, val))
-                    else:
-                        cmds.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d" % (pin_name, val, val, val, val))
-            if cmds:
-                try:
-                    urllib.request.urlopen(MOONRAKER + "/printer/gcode/script", data=urllib.parse.urlencode({"script": "\n".join(cmds)}).encode(), timeout=5).close()
-                except Exception:
-                    pass
-            self._send_json(200, {"ok": True, "light_on": new_on})
-        elif path == "/api/update/check":
-            update = check_for_updates()
-            if update:
-                self._send_json(200, {"ok": True, "has_update": True, "new_version": update["version"]})
-            else:
-                self._send_json(200, {"ok": True, "has_update": False, "current_version": VERSION})
-        elif path == "/api/update/apply":
-            update = check_for_updates()
-            if update:
-                threading.Thread(target=apply_update, args=(update,), daemon=True).start()
-                self._send_json(200, {"ok": True, "message": "Updating to v%s..." % update["version"]})
-            else:
-                self._send_json(200, {"ok": True, "message": "Already up to date"})
-        else:
-            self._send_json(404, {"error": "unknown endpoint"})
-    except Exception as e:
-        log.exception("API Error on %s: %s", path, e)
-        self._send_json(500, {"error": str(e)})
+                self._send_json(404, {"error": "unknown endpoint"})
+        except Exception as e:
+            log.exception("API Error on %s: %s", path, e)
+            self._send_json(500, {"error": str(e)})
 
     def do_GET(self):
         global CAM_SNAPSHOT_URL, last_cam_fail_ts
-        parts = self.path.split("?", 1); path = parts.pop(0); qs = dict(urllib.parse.parse_qsl(parts.pop(0))) if parts else {}
+        parts = self.path.split("?", 1)
+        path = parts.pop(0)
+        qs = dict(urllib.parse.parse_qsl(parts.pop(0))) if parts else {}
         if path in ("/", "/index.html"):
             if os.path.isfile(WEBAPP_FILE):
                 with open(WEBAPP_FILE, "rb") as f: html = f.read()
-                self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(html))); self.end_headers(); self.wfile.write(html)
-            else: self._send_json(404, {"error": "webapp.html not found"})
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(html)))
+                self.end_headers()
+                self.wfile.write(html)
+            else:
+                self._send_json(404, {"error": "webapp.html not found"})
         elif path == "/api/cam.jpg":
             img = None
             if not CAM_SNAPSHOT_URL and time.time() - last_cam_fail_ts > 60: detect_environment()
@@ -1594,12 +1577,20 @@ def _handle_api(self, path, params):
                 except Exception as e:
                     log.warning("WebApp cam err: %s", e); CAM_SNAPSHOT_URL = ""; last_cam_fail_ts = time.time()
             if img:
-                self.send_response(200); self.send_header("Content-Type", "image/jpeg"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(img))); self.end_headers(); self.wfile.write(img)
-            else: self.send_response(503); self.end_headers()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(img)))
+                self.end_headers()
+                self.wfile.write(img)
+            else:
+                self.send_response(503); self.end_headers()
         elif path.startswith("/api/"):
-            if not self._check_auth(qs): self._send_json(403, {"error": "unauthorized"}); return
+            if not self._check_auth(qs):
+                self._send_json(403, {"error": "unauthorized"}); return
             self._handle_api(path, qs)
-        else: self.send_response(404); self.end_headers()
+        else:
+            self.send_response(404); self.end_headers()
 
     def do_POST(self):
         path = self.path.split("?", 1).pop(0)
@@ -1608,7 +1599,8 @@ def _handle_api(self, path, params):
             body = json.loads(self.rfile.read(ln).decode("utf-8")) if ln > 0 else {}
         except Exception:
             self._send_json(400, {"error": "bad json"}); return
-        if not self._check_auth(body): self._send_json(403, {"error": "unauthorized"}); return
+        if not self._check_auth(body):
+            self._send_json(403, {"error": "unauthorized"}); return
         self._handle_api(path, body)
 
 def _tunnel_worker():
@@ -1650,10 +1642,7 @@ def start_webapp_services():
     except Exception as e:
         log.warning("WebApp start err: %s", e)
 
-
-# ==================== 13. ОСНОВНОЙ ЦИКЛ МОНИТОРИНГА =================
-# Защита от двойного запуска: второй экземпляр убьёт первый через 409 Conflict
-import fcntl
+# ==================== 12. ОСНОВНОЙ ЦИКЛ МОНИТОРИНГА ====================
 LOCK_FILE = os.path.join(BASE_DIR, "printer_tg_bot.lock")
 try:
     _lock_fd = open(LOCK_FILE, "w")
@@ -1665,8 +1654,6 @@ except (IOError, OSError):
     print("Another instance is already running! Exiting.")
     sys.exit(0)
 
-detect_environment()
-start_webapp_services()
 detect_environment()
 start_webapp_services()
 
@@ -1687,7 +1674,6 @@ if migrate_state(_st):
 mode_str = "CFS (4 слота)" if HAS_CFS else "Одиночная катушка"
 tg_send("✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>" % (VERSION, mode_str), MAIN_KB)
 
-# КРИТИЧЕСКИЙ ФИКС: Опрос Telegram вынесен в отдельный поток, чтобы не блокировать основной цикл и WebApp
 threading.Thread(target=check_commands, daemon=True).start()
 
 while True:
@@ -1700,16 +1686,13 @@ while True:
         ps = st.get("print_stats", {})
         state, fname, msg = ps.get("state"), ps.get("filename", ""), ps.get("message", "")
         used_mm, print_dur = ps.get("filament_used", 0) or 0, ps.get("print_duration", 0) or 0
-        
         if last_state is None and state in ("printing", "paused"):
             last_state = state; last_fname = fname
             time.sleep(POLL_INTERVAL); continue
-            
         if (state == "printing" and last_state == "printing" and fname and last_fname and fname != last_fname):
             log.warning("Пропущенное завершение: %s -> %s", last_fname, fname)
             handle_missed_job_end(last_fname)
             last_state = None
-            
         if state == "printing" and last_state not in ("printing", "paused"):
             if TIMELAPSE_DIR and os.path.isdir(TIMELAPSE_DIR):
                 print_start_files = set(f for f in os.listdir(TIMELAPSE_DIR) if f.endswith(".mp4"))
@@ -1743,14 +1726,11 @@ while True:
                     "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)" % (full, depr)])
             start_kb = {"inline_keyboard": MAIN_KB["inline_keyboard"] + extra_btns} if extra_btns else MAIN_KB
             send_thumbnail(meta, "\n".join(lines), start_kb)
-            
         elif state == "paused" and last_state != "paused":
             p_msg = "⚠️ <b>Кончился филамент!</b>\nПечать на паузе.\n• Файл: <b>%s</b>" % esc(fname) if ("filament" in msg.lower() or "out of" in msg.lower()) else "⏸ <b>Печать на паузе</b>\n• Причина: %s\n• Файл: <b>%s</b>" % (esc(msg or "не указана"), esc(fname))
             send_usb_photo(p_msg, MAIN_KB)
-            
         elif state == "complete" and last_state != "complete":
             process_completed_job(fname, get_file_meta(fname), print_dur, used_mm, send_video=True)
-            
         elif (state == "error" and last_state != "error") or (state in ("standby", "cancelled") and last_state in ("printing", "paused")):
             meta = get_file_meta(fname); record_material_usage(meta, used_mm, fname)
             w, direct, full, _, depr = calc_costs(meta, print_dur, used_mm); record_waste(w, direct)
@@ -1767,11 +1747,7 @@ while True:
             if state == "error": send_usb_photo(out_txt, MAIN_KB)
             else: tg_send(out_txt, MAIN_KB)
             update_counters(1 if (HAS_CFS and used_mm > 0) else 0)
-            
         last_state = state; last_fname = fname
-        
     except Exception:
         log.exception("Loop error")
-    
-    # КРИТИЧЕСКИЙ ФИКС: Пауза всегда в конце цикла, предотвращает 100% загрузку CPU
     time.sleep(POLL_INTERVAL)
