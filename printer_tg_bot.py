@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -3015,7 +3015,7 @@ def _confirm_pending_update():
 # /api/state cache: the panel opens instantly while a background thread
 # refreshes it, so HTTP requests never wait for Moonraker.
 PANEL_CACHE_TTL = 5.0
-_panel_cache = {"ts": 0.0, "data": None}
+_panel_cache = {"ts": 0.0, "data": None, "gen": 0}
 _panel_lock = threading.Lock()
 
 # Кэш превью в оперативной памяти: без base64 в printer_state.json.
@@ -3072,24 +3072,47 @@ def _safe_thumb_path(path):
 
 
 def _refresh_panel_cache():
+    """Собирает снимок панели и кладёт его в кэш.
+    Builds a panel snapshot and stores it in the cache.
+
+    Поколение (gen) защищает от гонки: если за время сборки кэш был
+    инвалидирован (например, сохранились настройки), устаревший снимок
+    не перезапишет свежие данные.
+    The generation counter guards against a race: if the cache was
+    invalidated while the snapshot was being built (e.g. settings were
+    saved), the stale snapshot must not overwrite the fresh data."""
+    with _panel_lock:
+        gen = _panel_cache.get("gen", 0)
     data = build_webapp_payload()
     with _panel_lock:
-        _panel_cache["data"] = data
-        _panel_cache["ts"] = time.time()
+        if _panel_cache.get("gen", 0) == gen:
+            _panel_cache["data"] = data
+            _panel_cache["ts"] = time.time()
     return data
 
 
-def get_panel_payload():
-    """Снимок панели из кэша (первый запрос строит его синхронно).
-    Panel snapshot from cache; the very first request builds it synchronously."""
+def _invalidate_panel_cache():
+    """Помечает кэш устаревшим: следующее чтение соберёт свежие данные.
+    Marks the cache stale so the next read rebuilds fresh data."""
+    with _panel_lock:
+        _panel_cache["gen"] = _panel_cache.get("gen", 0) + 1
+        _panel_cache["ts"] = 0.0
+
+
+def get_panel_payload(force=False):
+    """Снимок панели из кэша; force — собрать заново прямо сейчас.
+    Panel snapshot from cache; force rebuilds it synchronously."""
     with _panel_lock:
         data = _panel_cache["data"]
         ts = _panel_cache["ts"]
-    if data is None:
+    age = max(0.0, time.time() - (ts or 0.0))
+    if data is None or force or (ts and age > PANEL_CACHE_TTL * 3):
         data = _refresh_panel_cache()
         with _panel_lock:
             ts = _panel_cache["ts"]
-    age = max(0.0, time.time() - (ts or 0.0))
+        # Только что собранный снимок всегда свежий.
+        # A snapshot built right now is always fresh.
+        age = max(0.0, time.time() - ts) if ts else 0.0
     out = dict(data)
     out["cached_age"] = round(age, 1)
     out["stale"] = age > PANEL_CACHE_TTL * 3
@@ -3158,7 +3181,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
     def _handle_api(self, path, params):
         try:
             if path == "/api/state":
-                self._send_json(200, get_panel_payload())
+                fresh = str(params.get("fresh") or "") in ("1", "true", "yes")
+                self._send_json(200, get_panel_payload(force=fresh))
             elif path == "/api/spool/delta":
                 self._handle_spool_delta(params)
             elif path == "/api/settings/save":
@@ -3252,20 +3276,26 @@ class WebAppHandler(BaseHTTPRequestHandler):
                     settings["currency"] = code
                 else:
                     bad.append("currency")
+            # Пустые поля и null от панели — не ошибка, просто не меняем значение.
+            # Empty fields and nulls from the panel are not errors: keep the value.
             for key in int_keys:
-                if key in params and str(params[key]).strip() != "":
-                    val = _as_int(params[key])
-                    if val is None:
-                        bad.append(key)
-                    else:
-                        settings[key] = val
+                raw = params.get(key)
+                if raw is None or str(raw).strip() == "":
+                    continue
+                val = _as_int(raw)
+                if val is None:
+                    bad.append(key)
+                else:
+                    settings[key] = val
             for key in float_keys:
-                if key in params and str(params[key]).strip() != "":
-                    val = _as_float(params[key])
-                    if val is None or val < 0:
-                        bad.append(key)
-                    else:
-                        settings[key] = val
+                raw = params.get(key)
+                if raw is None or str(raw).strip() == "":
+                    continue
+                val = _as_float(raw)
+                if val is None or val < 0:
+                    bad.append(key)
+                else:
+                    settings[key] = val
             if params.get("prices_json"):
                 try:
                     raw = json.loads(params["prices_json"])
@@ -3286,10 +3316,19 @@ class WebAppHandler(BaseHTTPRequestHandler):
             st["settings"] = settings
 
         mutate_state(_apply)
+        # Часть значений могла примениться даже при ошибках в других полях,
+        # поэтому кэш сбрасываем всегда.
+        # Some values may have been applied even if other fields failed,
+        # so the cache is invalidated unconditionally.
+        _invalidate_panel_cache()
+        code = currency_code()
         if bad:
-            self._send_json(400, {"ok": False, "error": "bad values", "fields": bad})
+            self._send_json(400, {"ok": False, "error": "bad values", "fields": bad,
+                                  "currency": code,
+                                  "currency_symbol": CURRENCY_SYMBOLS.get(code, "")})
         else:
-            self._send_json(200, {"ok": True})
+            self._send_json(200, {"ok": True, "currency": code,
+                                  "currency_symbol": CURRENCY_SYMBOLS.get(code, "")})
 
     def _handle_spool_save(self, params):
         mat = str(params.get("mat") or "PLA").strip().upper()[:16] or "PLA"
@@ -3460,6 +3499,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
             st["settings"] = settings
 
         mutate_state(_apply)
+        _invalidate_panel_cache()
         # Пересобираем все клавиатуры, включая приветствие.
         # Rebuild every keyboard, the welcome one included.
         global MAIN_KB, WELCOME_KB, MAINT_KB, RESET_KB

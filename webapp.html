@@ -713,6 +713,7 @@
         "update_error": "Ошибка проверки",
         "update_installing": "Установка...",
         "settings_saved": "Настройки сохранены",
+        "settings_error": "Не удалось сохранить настройки",
         "currency_title": "💱 Валюта цен",
         "currency_code_label": "Валюта",
         "currency_hint": "Все суммы и цены вводятся и отображаются в этой валюте — без пересчёта по курсу",
@@ -849,6 +850,7 @@
         "update_error": "Check error",
         "update_installing": "Installing...",
         "settings_saved": "Settings saved",
+        "settings_error": "Failed to save settings",
         "currency_title": "💱 Price currency",
         "currency_code_label": "Currency",
         "currency_hint": "All amounts and prices are entered and shown in this currency — no exchange-rate conversion",
@@ -1006,9 +1008,11 @@
       }).then(r => r.json());
     }
 
-    async function loadState() {
+    async function loadState(fresh = false) {
       try {
-        STATE = await apiGet('/api/state');
+        // fresh=1 — пересобрать состояние на сервере, минуя кэш панели.
+        // fresh=1 — rebuild the state on the server, bypassing the panel cache.
+        STATE = await apiGet('/api/state' + (fresh ? '?fresh=1' : ''));
         if (STATE.settings && STATE.settings.language) {
           currentLang = STATE.settings.language;
           localStorage.setItem('printer_lang', currentLang);
@@ -1540,9 +1544,31 @@
         spool_tracking: document.getElementById('spool-toggle').checked,
         prices_json: JSON.stringify(prices)
       };
-      apiPost('/api/settings/save', body).then(() => {
+      apiPost('/api/settings/save', body).then((res) => {
+        if (!res || res.ok === false) {
+          // Часть полей могла примениться: показываем фактическое состояние,
+          // чтобы форма не расходилась с сервером.
+          // Some fields may have been applied: reload the real state so the
+          // form never disagrees with the server.
+          if (res && res.currency && STATE && STATE.settings) {
+            STATE.settings.currency = res.currency;
+            STATE.settings.currency_symbol = res.currency_symbol || '';
+            renderAll();
+          }
+          const fields = (res && res.fields) ? ': ' + res.fields.join(', ') : '';
+          if (tg && tg.showAlert) tg.showAlert(t('settings_error') + fields);
+          loadState(true);
+          return;
+        }
+        // Применяем валюту сразу, не ожидая следующего опроса состояния.
+        // Apply the currency immediately instead of waiting for the next poll.
+        if (res && res.currency && STATE && STATE.settings) {
+          STATE.settings.currency = res.currency;
+          STATE.settings.currency_symbol = res.currency_symbol || '';
+          renderAll();
+        }
         if (tg && tg.showAlert) tg.showAlert(t('settings_saved'));
-        loadState();
+        loadState(true);
       });
     }
 
