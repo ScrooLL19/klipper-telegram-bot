@@ -176,6 +176,10 @@ def check_currency():
         fail("webapp auth", "key still passed in the URL")
     else:
         ok("panel auth uses headers")
+    if "#key=%s" in py and "readApiKey" in read("webapp.html"):
+        ok("panel key uses URL fragment")
+    else:
+        fail("panel key", "expected #key= in the menu URL and readApiKey() in the panel")
 
 
 def check_features():
@@ -218,6 +222,23 @@ def check_features():
         fail("webapp new blocks", ", ".join(absent))
     else:
         ok("webapp new blocks (job, archive, efficiency, forecast)")
+
+
+def check_line_endings():
+    """Shell-скрипты должны быть в LF: CRLF ломает `case ... in` в busybox sh.
+    Shell scripts must use LF: CRLF breaks `case ... in` in busybox sh."""
+    for name in ("install.sh", "uninstall.sh"):
+        try:
+            with open(os.path.join(BASE, name), "rb") as f:
+                data = f.read()
+        except OSError:
+            fail("line endings %s" % name, "missing file")
+            continue
+        if b"\r\n" in data:
+            fail("line endings %s" % name,
+                 "CRLF found; busybox sh fails on `case ... in`")
+        else:
+            ok("LF endings %s" % name)
 
 
 def check_paths():
@@ -281,6 +302,7 @@ def main():
     check_currency()
     check_features()
     check_paths()
+    check_line_endings()
     check_shell()
     print("")
     if errors:

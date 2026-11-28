@@ -38,8 +38,8 @@ A lightweight Telegram bot with a built-in **Telegram Mini App** for **Klipper +
 **🛡 Reliability**
 - Atomic state writes: `tmp → fsync → .bak → replace`, reads fall back to `.bak`.
 - All read-modify-write operations go through a single lock (`mutate_state`).
-- Mini App auth: panel key or signed Telegram `initData` (24 h lifetime, `chat_id` / `allowed_users` check). `Referer` is never trusted.
-- OTA: `version.txt` → `manifest.json` (sha256 per file) → staging → verify → backup → replace → **automatic rollback** on any error.
+- Mini App auth: panel key or signed Telegram `initData` (24 h lifetime, `chat_id` / `allowed_users` check). `Referer` is never trusted. The key and `initData` travel in headers, not in the URL.
+- OTA: `version.txt` → `manifest.json` (sha256 per file) → staging → verify → backup → replace → **automatic rollback** on any error. Files in subdirectories are supported.
 
 ### 📦 Requirements
 
@@ -61,7 +61,8 @@ The installer:
 2. downloads files by `manifest.json` with sha256 verification (raw GitHub first, jsDelivr as fallback);
 3. asks for **Bot TOKEN** and **CHAT_ID** (or use `BOT_TOKEN=... BOT_CHAT_ID=... sh install.sh`), writes `secrets.ini`;
 4. optionally installs `cloudflared` (matches `arm` / `arm64` / `amd64`);
-5. verifies the install and enables autostart (`procd` on OpenWrt, `systemd` on Linux).
+5. refreshes `uninstall.sh` and strips CRLF from shell scripts;
+6. verifies the install and enables autostart (`procd` on OpenWrt, `systemd` on Linux).
 
 Default directory: `/root/printer_tg_bot` (falls back to `$HOME/printer_tg_bot`).
 
@@ -83,6 +84,7 @@ Stops and removes the service, stops `cloudflared` by PID, removes the install d
 | Symptom | Fix |
 |---|---|
 | `can't open file '/root/printer_tg_bot.py'` | Wrong autostart path — re-run the installer or fix the service command |
+| `syntax error: unexpected word (expecting "in")` in `uninstall.sh` | Windows line endings (CRLF). Fix: `python3 -c "p='/root/printer_tg_bot/uninstall.sh'; d=open(p,'rb').read(); open(p,'wb').write(d.replace(b'\r\n',b'\n'))" && sh /root/printer_tg_bot/uninstall.sh` |
 | `CERTIFICATE_VERIFY_FAILED` | `opkg install ca-bundle` |
 | `MISSING: ...` at install | Install `python3-urllib`, `python3-openssl`, `python3-logging` |
 | No updates found | jsDelivr cache — raw GitHub is queried first; check `printer_tg_bot.log` for the reason shown in the panel |
@@ -102,12 +104,12 @@ Stops and removes the service, stops `cloudflared` by PID, removes the install d
 | `manifest.json` / `version.txt` | OTA manifest and current version |
 | `manifest_files.txt` | single OTA file list used by the generator |
 | `gen_manifest.py` | regenerate the manifest before a release |
-| `smoke_test.py` | quick checks: i18n parity, manifest hashes, shell syntax |
+| `smoke_test.py` | quick checks: i18n parity, manifest hashes, safe paths, line endings |
 
 ### 🔐 Security notes
 
 - Mini App accepts only the panel key or signed `initData`; `initData` older than 24 h is rejected.
-- OTA verifies sha256 from `manifest.json` and rolls back on mismatch.
+- OTA verifies sha256 from `manifest.json`, allows only safe relative paths and rolls back on mismatch.
 - `secrets.ini`, `printer_state.json` and logs are excluded from git (see `.gitignore`).
 
 ---
@@ -144,8 +146,8 @@ Stops and removes the service, stops `cloudflared` by PID, removes the install d
 **🛡 Надёжность**
 - Атомарная запись состояния: `tmp → fsync → .bak → replace`, чтение с откатом на `.bak`.
 - Все операции «прочитать → изменить → записать» идут под одним локом (`mutate_state`).
-- Авторизация Mini App: ключ панели или подписанный Telegram `initData` (срок 24 ч, проверка `chat_id` / `allowed_users`). `Referer` не используется.
-- OTA: `version.txt` → `manifest.json` (sha256 по каждому файлу) → staging → проверка → бэкап → замена → **автоматический откат** при любой ошибке.
+- Авторизация Mini App: ключ панели или подписанный Telegram `initData` (срок 24 ч, проверка `chat_id` / `allowed_users`). `Referer` не используется. Ключ и `initData` передаются заголовками, а не в URL.
+- OTA: `version.txt` → `manifest.json` (sha256 по каждому файлу) → staging → проверка → бэкап → замена → **автоматический откат** при любой ошибке. Поддерживаются файлы в подкаталогах.
 
 ### 📦 Требования
 
@@ -167,7 +169,8 @@ python3 -c "import urllib.request as u; open('/tmp/install.sh','wb').write(u.url
 2. скачивает файлы по `manifest.json` со сверкой sha256 (сначала raw GitHub, затем jsDelivr);
 3. спрашивает **TOKEN** бота и **CHAT_ID** (можно передать `BOT_TOKEN=... BOT_CHAT_ID=... sh install.sh`) и создаёт `secrets.ini`;
 4. по желанию ставит `cloudflared` под вашу архитектуру (`arm` / `arm64` / `amd64`);
-5. проверяет установку и включает автозапуск (`procd` на OpenWrt, `systemd` на Linux).
+5. обновляет `uninstall.sh` и убирает CRLF из shell-скриптов;
+6. проверяет установку и включает автозапуск (`procd` на OpenWrt, `systemd` на Linux).
 
 Каталог по умолчанию: `/root/printer_tg_bot` (иначе `$HOME/printer_tg_bot`).
 
@@ -189,6 +192,7 @@ sh /root/printer_tg_bot/uninstall.sh
 | Симптом | Решение |
 |---|---|
 | `can't open file '/root/printer_tg_bot.py'` | Неверный путь автозапуска — перезапустите установщик или поправьте службу |
+| `syntax error: unexpected word (expecting "in")` в `uninstall.sh` | Windows-переводы строк (CRLF). Исправление: `python3 -c "p='/root/printer_tg_bot/uninstall.sh'; d=open(p,'rb').read(); open(p,'wb').write(d.replace(b'\r\n',b'\n'))" && sh /root/printer_tg_bot/uninstall.sh` |
 | `CERTIFICATE_VERIFY_FAILED` | `opkg install ca-bundle` |
 | `MISSING: ...` при установке | Доставьте `python3-urllib`, `python3-openssl`, `python3-logging` |
 | Обновления не находятся | Кэш jsDelivr — raw GitHub опрашивается первым; причина видна в панели и в `printer_tg_bot.log` |
@@ -208,10 +212,10 @@ sh /root/printer_tg_bot/uninstall.sh
 | `manifest.json` / `version.txt` | манифест OTA и текущая версия |
 | `manifest_files.txt` | единый список файлов для OTA и генератора |
 | `gen_manifest.py` | пересборка манифеста перед релизом |
-| `smoke_test.py` | быстрые проверки: паритет i18n, хеши манифеста, синтаксис shell |
+| `smoke_test.py` | быстрые проверки: паритет i18n, хеши манифеста, безопасные пути, переводы строк |
 
 ### 🔐 Безопасность
 
 - Mini App принимает только ключ панели или подписанный `initData`; `initData` старше 24 ч отклоняется.
-- OTA сверяет sha256 из `manifest.json` и откатывается при несовпадении.
+- OTA сверяет sha256 из `manifest.json`, допускает только безопасные относительные пути и откатывается при несовпадении.
 - `secrets.ini`, `printer_state.json` и логи исключены из git (см. `.gitignore`).

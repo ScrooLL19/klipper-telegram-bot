@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.7.0"
+VERSION = "1.7.2"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -536,11 +536,14 @@ def _refresh_menu_button():
             "menu_button": json.dumps({
                 "type": "web_app",
                 "text": t("webapp_panel"),
-                # Ключ не передаём в URL: он попадает в логи прокси и браузера.
-                # Панель авторизуется подписанным initData, ключ — только заголовком.
-                # The key is not put into the URL (it leaks into proxy/browser logs):
-                # the panel authenticates with signed initData, the key is header-only.
-                "web_app": {"url": "%s/" % url},
+                # Ключ передаём во фрагменте (#key=...): фрагмент не уходит на
+                # сервер и не попадает в логи прокси. Это рабочий резерв, если
+                # initData не проходит (например, бот пишет в группу, и user.id
+                # не совпадает с chat_id).
+                # The key goes in the hash fragment (#key=...): fragments are never
+                # sent to the server or logged by proxies. It is the fallback when
+                # initData fails (e.g. the bot posts to a group and user.id != chat_id).
+                "web_app": {"url": "%s/#key=%s" % (url, WEBAPP_SECRET)},
             }),
         })
         log.info("setChatMenuButton: %s", res)
@@ -737,6 +740,36 @@ for _base in _candidates:
     _base = (_base or "").rstrip("/")
     if _base and _base not in UPDATE_BASES:
         UPDATE_BASES.append(_base)
+
+
+def _write_bytes_atomic(path, data):
+    """Атомарная запись байтов (tmp -> fsync -> replace).
+    Atomic byte write (tmp -> fsync -> replace)."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _normalize_shell_scripts():
+    """Убирает CRLF из shell-скриптов: busybox sh падает на `case ... in`.
+    Strips CRLF from shell scripts: busybox sh fails on `case ... in`."""
+    for name in ("install.sh", "uninstall.sh"):
+        path = os.path.join(BASE_DIR, name)
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        if b"\r\n" not in data:
+            continue
+        try:
+            _write_bytes_atomic(path, data.replace(b"\r\n", b"\n"))
+            log.warning("CRLF убран в %s / CRLF normalized in %s", name, name)
+        except OSError as e:
+            log.warning("Не удалось убрать CRLF в %s: %s", name, e)
 
 
 def _startup_fail(msg_ru, msg_en):
@@ -2415,7 +2448,11 @@ def verify_tg_init_data(init_data):
         if not parsed.get("user"):
             return False
         user_obj = json.loads(parsed["user"])
-        return str(user_obj.get("id", "")) in _allowed_user_ids()
+        user_id = str(user_obj.get("id", ""))
+        if user_id not in _allowed_user_ids():
+            log.warning("initData: user %s не разрешён / not allowed", user_id)
+            return False
+        return True
     except Exception as e:
         log.warning("initData: ошибка проверки / validation error: %s", e)
         return False
@@ -2435,6 +2472,42 @@ def get_file_meta_cached(filename, ttl=30.0):
 
 
 def build_webapp_payload():
+    """Состояние панели; при сбое отдаёт минимальный валидный ответ.
+    Panel state; falls back to a minimal valid payload on failure."""
+    try:
+        return _build_webapp_payload()
+    except Exception:
+        log.exception("Не удалось собрать состояние панели / panel payload failed")
+        return _minimal_webapp_payload()
+
+
+def _minimal_webapp_payload():
+    """Минимальный ответ, чтобы панель не оставалась пустой.
+    Minimal payload so the panel never renders empty."""
+    try:
+        lang = get_language()
+    except Exception:
+        lang = "ru"
+    try:
+        code = currency_code()
+    except Exception:
+        code = "RUB"
+    return {
+        "version": VERSION, "has_cfs": HAS_CFS, "cfs_temp": "?", "cfs_hum": "?",
+        "slots": [], "single_spool_id": None, "spools": [],
+        "settings": {"language": lang, "currency": code,
+                     "currency_symbol": CURRENCY_SYMBOLS.get(code, "")},
+        "job": None,
+        "maintenance_forecast": {"enough_data": False, "items": []},
+        "archive": [], "efficiency": {"print_ratio": None, "prep_seconds": 0},
+        "printer": {"state": "unknown", "filename": "", "progress": 0,
+                    "duration": 0, "total_duration": 0,
+                    "prep_seconds": 0, "print_ratio": None},
+        "consumables": {}, "stats": {}, "payload_error": True,
+    }
+
+
+def _build_webapp_payload():
     st = load_state()
     ps_all = get_print_stats()
     ps = ps_all.get("print_stats", {})
@@ -3076,7 +3149,11 @@ class WebAppHandler(BaseHTTPRequestHandler):
         if WEBAPP_SECRET and key and hmac.compare_digest(key, str(WEBAPP_SECRET)):
             return True
         init_data = str(self.headers.get("X-Tg-Init-Data") or params.get("initData") or "")
-        return verify_tg_init_data(init_data)
+        ok = verify_tg_init_data(init_data)
+        if not ok:
+            log.warning("WebApp auth failed: path=%s key=%s initData=%s",
+                        getattr(self, "path", "?"), bool(key), bool(init_data))
+        return ok
 
     def _handle_api(self, path, params):
         try:
@@ -3571,6 +3648,7 @@ else:
         pass
     log.warning("fcntl недоступен: блокировка второго экземпляра отключена / flock unavailable")
 
+_normalize_shell_scripts()
 detect_environment()
 start_webapp_services()
 start_background_workers()

@@ -39,42 +39,20 @@ def _progress(done, total, started, label):
     speed = _fmt_mb(done) / elapsed
     name = os.path.basename(label)[:NAME_WIDTH]
     if total and total > 0:
-        pct = min(100, int(done * 100 / total))
-        filled = pct * BAR_WIDTH // 100
+        ratio = min(1.0, float(done) / total)
+        filled = int(BAR_WIDTH * ratio)
         bar = "#" * filled + "-" * (BAR_WIDTH - filled)
-        line = "   [%s] %3d%%  %6.1f/%6.1f MB  %5.1f MB/s  %s" % (
-            bar, pct, _fmt_mb(done), _fmt_mb(total), speed, name)
+        line = "[%s] %3d%% %5.1f/%5.1f MB %4.1f MB/s %s" % (
+            bar, int(ratio * 100), _fmt_mb(done), _fmt_mb(total), speed, name)
     else:
-        line = "   %8.1f MB  %5.1f MB/s  %s" % (_fmt_mb(done), speed, name)
-    sys.stdout.write("\r" + line[:100])
+        line = "  %5.1f MB %4.1f MB/s %s" % (_fmt_mb(done), speed, name)
+    sys.stdout.write("\r" + line[:110])
     sys.stdout.flush()
 
 
-def http_get(url, timeout=45, retries=3):
-    """GET с повторами; возвращает bytes.
-    GET with retries; returns raw bytes."""
-    last = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
-                return resp.read()
-        except Exception as exc:  # noqa: BLE001 - нужен любой сбой сети / any network failure
-            last = exc
-            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
-                raise RuntimeError(
-                    "нет CA-сертификатов / no CA bundle, выполните: opkg install ca-bundle")
-            time.sleep(2 * (attempt + 1))
-    raise RuntimeError("GET failed: %s (%s)" % (url, last))
-
-
-def sha256_hex(data):
-    return hashlib.sha256(data).hexdigest()
-
-
 def _normalize_script(path):
-    """Приводит .sh к LF — иначе OpenWrt ругается на CRLF.
-    Converts .sh files to LF, otherwise OpenWrt fails on CRLF."""
+    """Переводит .sh в LF: CRLF ломает busybox sh (`case ... in`).
+    Converts .sh to LF: CRLF breaks busybox sh (`case ... in`)."""
     with open(path, "rb") as f:
         data = f.read()
     if b"\r\n" in data:
@@ -152,6 +130,13 @@ def _safe_name(name):
     return "/".join(parts)
 
 
+def http_get(url, timeout=20):
+    """GET с явным User-Agent / GET with an explicit User-Agent."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+        return resp.read()
+
+
 def fetch_manifest(manifest_url, dest_dir):
     """Скачивает все файлы из манифеста с проверкой sha256.
     Downloads every manifest entry and verifies its sha256."""
@@ -167,8 +152,13 @@ def fetch_manifest(manifest_url, dest_dir):
         safe = _safe_name(name)
         meta = meta or {}
         url = "%s/%s?v=%s" % (base, safe, version)
-        written = download(url, os.path.join(dest_dir, safe),
-                           meta.get("sha256"), meta.get("size"))
+        dest = os.path.join(dest_dir, safe)
+        written = download(url, dest, meta.get("sha256"), meta.get("size"))
+        if safe.endswith(".sh"):
+            try:
+                os.chmod(dest, 0o755)
+            except OSError:
+                pass
         total_bytes += written
         print("   OK %-24s %8d bytes, sha256 verified" % (safe, written))
     return version, len(files), total_bytes
@@ -185,13 +175,10 @@ def main(argv):
         written = download(argv[1], argv[2], argv[3] if len(argv) > 3 else None, size)
         print("-> %s (%d bytes)" % (argv[2], written))
         return 0
-    print("usage: fetch.py URL DEST [SHA256 [SIZE]] | fetch.py --manifest URL DIR")
+    print("usage: fetch.py URL DEST [SHA256 [SIZE]]")
+    print("       fetch.py --manifest MANIFEST_URL DEST_DIR")
     return 2
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main(sys.argv))
-    except Exception as exc:  # noqa: BLE001 - CLI: печатаем причину и выходим
-        sys.stderr.write("ERROR: %s\n" % exc)
-        sys.exit(1)
+    sys.exit(main(sys.argv))

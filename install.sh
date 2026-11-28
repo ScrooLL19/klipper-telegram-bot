@@ -152,9 +152,23 @@ if [ "$FETCH_OK" -ne 1 ]; then
   exit 1
 fi
 
-if [ ! -f uninstall.sh ]; then
-  "$PY" "$FETCH" "$REPO_RAW/uninstall.sh" "$INSTALL_DIR/uninstall.sh" || \
-    "$PY" "$FETCH" "$REPO_MIRROR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+# uninstall.sh не входит в OTA-манифест: обновляем его при каждой установке
+# и убираем CRLF — иначе busybox sh падает на `case ... in`.
+# uninstall.sh is not part of the OTA manifest: refresh it on every install
+# and strip CRLF, otherwise busybox sh fails on `case ... in`.
+say "-> Refreshing uninstall.sh..."
+"$PY" "$FETCH" "$REPO_RAW/uninstall.sh" "$INSTALL_DIR/uninstall.sh" || \
+  "$PY" "$FETCH" "$REPO_MIRROR/uninstall.sh" "$INSTALL_DIR/uninstall.sh" || true
+if [ -f "$INSTALL_DIR/uninstall.sh" ]; then
+  "$PY" - "$INSTALL_DIR/uninstall.sh" <<'PYLF' || true
+import sys
+path = sys.argv[1]
+with open(path, "rb") as f:
+    data = f.read()
+if b"\r\n" in data:
+    with open(path, "wb") as f:
+        f.write(data.replace(b"\r\n", b"\n"))
+PYLF
 fi
 
 # config.ini никогда не перезаписываем — в нём настройки пользователя.
