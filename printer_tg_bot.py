@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -291,6 +291,10 @@ LANG = {
         "update_stage_restart": "🔁 Перезапуск на v%s...",
         "update_done": "✅ <b>Обновление завершено:</b> v%s → v%s\nТекущая версия: <b>v%s</b>",
         "update_rollback": "↩️ Откат / rollback: %s",
+        "consumables_unavailable": "⚠️ Не удалось получить данные расходников.",
+        "stats_unavailable": "⚠️ Не удалось получить статистику.",
+        "slot_button": "Слот %s (%s)",
+        "error_short": "❌ Ошибка",
     },
     "en": {
         "menu_status": "📊 Status",
@@ -467,6 +471,10 @@ LANG = {
         "update_stage_restart": "🔁 Restarting on v%s...",
         "update_done": "✅ <b>Update complete:</b> v%s → v%s\nCurrent version: <b>v%s</b>",
         "update_rollback": "↩️ Rollback: %s",
+        "consumables_unavailable": "⚠️ Failed to read maintenance data.",
+        "stats_unavailable": "⚠️ Failed to read statistics.",
+        "slot_button": "Slot %s (%s)",
+        "error_short": "❌ Error",
     }
 }
 
@@ -637,10 +645,22 @@ _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 log.addHandler(_handler)
 _i18n_selfcheck()
 
-# Источники обновлений: raw первым (свежий), jsDelivr как fallback (доступность).
-# Update sources: raw first (fresh), jsDelivr as fallback (reachability).
+# Источники обновлений: raw первым (без кэша), jsDelivr как fallback.
+# Если в config.ini задан собственный github_raw_base (форк или локальный
+# сервер), используется только он — чтобы не смешивать версии из разных
+# репозиториев. Раньше конфиг с jsDelivr полностью вытеснял raw, и из-за
+# кэша jsDelivr (до 12 ч) обновления "не находились".
+# Update sources: raw first (uncached), jsDelivr as fallback. A custom
+# github_raw_base in config.ini replaces the whole list.
+CANONICAL_RAW = "https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
+CANONICAL_MIRROR = "https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main"
+_cfg_base = (GITHUB_RAW_BASE or "").rstrip("/")
+if "ScrooLL19/klipper-telegram-bot" in _cfg_base:
+    _candidates = (CANONICAL_RAW, CANONICAL_MIRROR, _cfg_base)
+else:
+    _candidates = (_cfg_base,)
 UPDATE_BASES = []
-for _base in (GITHUB_RAW_BASE, GITHUB_MIRROR_BASE):
+for _base in _candidates:
     _base = (_base or "").rstrip("/")
     if _base and _base not in UPDATE_BASES:
         UPDATE_BASES.append(_base)
@@ -833,7 +853,7 @@ def _timelapse_worker(caption, kb, exclude_files):
             if video_path:
                 size_mb = os.path.getsize(video_path) / (1024.0 * 1024.0)
                 if size_mb > 49.0:
-                    tg_send(caption + "\n🎥 <i>Таймлапс записан (%.1f МБ), но превышает лимит Telegram 50 МБ.</i>" % size_mb, kb)
+                    tg_send(caption + t("timelapse_big", size_mb), kb)
                     return
                 with open(video_path, "rb") as vf:
                     if tg_send_media(True, vf.read(), "timelapse.mp4", "video/mp4", caption, kb, 120):
@@ -1269,14 +1289,16 @@ def deduct_spool_weight(filename, meta, weight_g):
     return "\n".join("• Катушка " + n for n in notes)
 
 def build_spools_view():
+    """Экран склада катушек на языке пользователя.
+    Spool inventory screen in the user's language."""
     st = load_state()
     if not cfg("spool_tracking"):
-        return "🧵 <b>Учет склада катушек отключен.</b>\nВключить его можно в <b>📱 Панель → Катушки / Настройки</b>.", {"inline_keyboard": [[{"text": "⬅️ Назад в меню", "callback_data": "btn_back"}]]}
+        return t("spool_tracking_off"), {"inline_keyboard": [[{"text": t("back_menu"), "callback_data": "btn_back"}]]}
     if HAS_CFS:
         slots, active_let, temp, hum = get_cfs_slots()
-        lines = ["🧵 <b>Склад катушек и CFS (%s°C | влажн. %s%%):</b>" % (temp, hum), "", "📦 <b>Сейчас в CFS:</b>"]
+        lines = [t("spools_cfs_title", temp, hum), "", t("spools_cfs_current")]
         if not slots:
-            lines.append("• Слоты CFS пусты")
+            lines.append(t("spools_cfs_empty"))
         else:
             for let in ("A", "B", "C", "D"):
                 if let in slots:
@@ -1284,26 +1306,29 @@ def build_spools_view():
                     sp = resolve_slot_spool(st, let, s_info["mat"], s_info["hex"], auto_create=False)
                     mark = " ▶️" if let == active_let else ""
                     if sp:
-                        lines.append("• Слот %s%s: <b>%s</b> — %.0f г" % (let, mark, sp_title(sp), sp["rem_g"]))
+                        lines.append(t("spools_cfs_slot", let, mark, sp_title(sp), sp["rem_g"]))
                     else:
-                        lines.append("• Слот %s%s: <i>не назначена</i>" % (let, mark))
-        ov_btn = {"text": "🔄 Уточнить слот", "callback_data": "sp_ov_menu"}
+                        lines.append(t("spools_cfs_slot_empty", let, mark))
+        ov_btn = {"text": t("spool_refine"), "callback_data": "sp_ov_menu"}
     else:
-        lines = ["🧵 <b>Склад катушек принтера:</b>", "", "📦 <b>Установлена сейчас:</b>"]
+        lines = [t("spools_single_title"), "", t("spools_single_current")]
         sp = resolve_slot_spool(st, "SINGLE")
-        if sp: lines.append("• Активная: <b>%s</b> — %.0f г" % (sp_title(sp), sp["rem_g"]))
-        else: lines.append("• Катушка не выбрана (добавьте её ниже)")
-        ov_btn = {"text": "🔄 Выбрать текущую", "callback_data": "sp_ovslot_SINGLE"}
+        if sp:
+            lines.append(t("spools_single_active", sp_title(sp), sp["rem_g"]))
+        else:
+            lines.append(t("spools_single_none"))
+        ov_btn = {"text": t("spool_select"), "callback_data": "sp_ovslot_SINGLE"}
     spools = [s for s in (st.get("spools") or []) if s.get("rem_g", 0) > 0]
     if spools:
-        lines.extend(["", "🗄 <b>Все открытые катушки (%d шт.):</b>" % len(spools)])
+        lines.extend(["", t("spools_all_title", len(spools))])
         for sp in sorted(spools, key=lambda x: x.get("rem_g", 0)):
-            lines.append("• %s: <b>%.0f г</b>" % (sp_title(sp), sp["rem_g"]))
+            lines.append(t("spools_all_item", sp_title(sp), sp["rem_g"]))
     kb = {
         "inline_keyboard": [
-            [{"text": "➕ Добавить", "callback_data": "sp_add"}, {"text": "✏️ Редактировать", "callback_data": "sp_edit_menu"}],
-            [ov_btn, {"text": "🗑 Удалить", "callback_data": "sp_del_menu"}],
-            [{"text": "⬅️ Назад в меню", "callback_data": "btn_back"}]
+            [{"text": t("spool_add"), "callback_data": "sp_add"},
+             {"text": t("spool_edit"), "callback_data": "sp_edit_menu"}],
+            [ov_btn, {"text": t("spool_delete"), "callback_data": "sp_del_menu"}],
+            [{"text": t("back_menu"), "callback_data": "btn_back"}]
         ]
     }
     return "\n".join(lines), kb
@@ -1451,28 +1476,25 @@ def analyze_history(history):
     return sec_7d / 3600.0, sec_30d / 3600.0, mm_7d / 1000.0, jobs_7d, ok_7d, ok_all, mats_7d
 
 def format_consumables():
+    """Ресурс расходников на языке пользователя.
+    Maintenance counters in the user's language."""
     totals = get_history_totals()
-    if not totals: return "⚠️ Не удалось получить данные расходников."
+    if not totals:
+        return t("consumables_unavailable")
     h, m = totals.get("total_time", 0) / 3600.0, totals.get("total_filament_used", 0) / 1000.0
     st = load_state()
-    return (
-        "🔩 <b>Ресурс расходников и ТО:</b>\n"
-        "• До планового ТО: <b>~%.1f ч</b>\n"
-        "• Сопло: <b>%.1f / %d м</b>\n"
-        "• Фильтр: <b>%.1f / %d ч</b>\n"
-        "• PTFE-трубка: <b>%.1f / %d м</b>\n"
-        "• Нож резака: <b>%d / %d резов</b>" % (
-            max(0.0, (st.get("last_maint_hours", 0) + MAINT_INTERVAL_HOURS) - h),
-            max(0.0, m - st.get("nozzle_start_meters", m)), NOZZLE_LIMIT_METERS,
-            max(0.0, h - st.get("filter_start_hours", h)), FILTER_LIMIT_HOURS,
-            max(0.0, m - st.get("ptfe_start_meters", m)), PTFE_LIMIT_METERS,
-            st.get("cutter_cuts", 0), CUTTER_LIMIT_CUTS
-        )
-    )
+    return "\n".join([
+        t("consumables_title"),
+        t("consumables_maint", max(0.0, (st.get("last_maint_hours", 0) + MAINT_INTERVAL_HOURS) - h)),
+        t("consumables_nozzle", max(0.0, m - st.get("nozzle_start_meters", m)), NOZZLE_LIMIT_METERS),
+        t("consumables_filter", max(0.0, h - st.get("filter_start_hours", h)), FILTER_LIMIT_HOURS),
+        t("consumables_ptfe", max(0.0, m - st.get("ptfe_start_meters", m)), PTFE_LIMIT_METERS),
+        t("consumables_cutter", st.get("cutter_cuts", 0), CUTTER_LIMIT_CUTS),
+    ])
 
 def format_stats():
     totals = get_history_totals()
-    if not totals: return "⚠️ Не удалось получить статистику."
+    if not totals: return t("stats_unavailable")
     h, m = totals.get("total_time", 0) / 3600.0, totals.get("total_filament_used", 0) / 1000.0
     jobs, longest_h = totals.get("total_jobs", 0), totals.get("longest_print", 0) / 3600.0
     total_g = m * G_PER_M_DEFAULT
@@ -1485,34 +1507,34 @@ def format_stats():
     st = load_state()
     waste_g, waste_rub = st.get("waste_g", 0.0), st.get("waste_rub", 0.0)
     lines = [
-        "📈 <b>Общая статистика принтера:</b>",
-        "• Время печати: <b>%.1f ч</b>" % h,
-        "• Расход филамента: <b>%.1f м</b> (~%.1f катушек)" % (m, m / M_PER_SPOOL),
-        "• Всего печатей: <b>%d</b>" % jobs
+        t("stats_title"),
+        t("stats_time", h),
+        t("stats_filament", m, m / M_PER_SPOOL),
+        t("stats_jobs", jobs),
     ]
     if hist_len > 0:
-        lines.append("• Рейтинг надежности: <b>%.0f%%</b> (%d из %d без сбоев)" % (ok_all * 100.0 / hist_len, ok_all, hist_len))
+        lines.append(t("stats_reliability", ok_all * 100.0 / hist_len, ok_all, hist_len))
     if waste_g > 0:
         w_pct = (waste_g * 100.0 / total_g) if total_g > 0 else 0
-        lines.append("• Потери на брак: <b>%.0f г</b> (~%.0f руб. | %.1f%%)" % (waste_g, waste_rub, w_pct))
+        lines.append(t("stats_waste", waste_g, waste_rub, w_pct))
     lines.extend([
-        "• Рекорд печати: <b>%.1f ч</b>" % longest_h,
-        "• В среднем за печать: <b>~%.1f ч / ~%.0f г</b>" % ((h / jobs if jobs else 0), (total_g / jobs if jobs else 0)),
+        t("stats_longest", longest_h),
+        t("stats_avg", (h / jobs if jobs else 0), (total_g / jobs if jobs else 0)),
         "",
-        "⏱ <b>Нагрузка принтера (КПД):</b>",
-        "• За 7 дней: <b>%.1f ч</b> (~%.1f ч/день | КПД %.0f%%)" % (h_7d, h_7d / 7.0, min(100.0, h_7d * 100.0 / 168.0)),
-        "• За 30 дней: <b>%.1f ч</b> (~%.1f ч/день | КПД %.0f%%)" % (h_30d, h_30d / 30.0, min(100.0, h_30d * 100.0 / 720.0))
+        t("stats_load_title"),
+        t("stats_7d", h_7d, h_7d / 7.0, min(100.0, h_7d * 100.0 / 168.0)),
+        t("stats_30d", h_30d, h_30d / 30.0, min(100.0, h_30d * 100.0 / 720.0)),
     ])
     mats = st.get("materials_meters", {})
     if mats:
-        lines.extend(["", "🧵 <b>Расход по типам пластика:</b>"])
+        lines.extend(["", t("stats_mats_title")])
         for k in sorted(mats, key=mats.get, reverse=True):
-            lines.append("• %s: <b>%.1f м</b> (~%.1f катушек)" % (k, mats[k], mats[k] / M_PER_SPOOL))
+            lines.append(t("stats_mat_item", k, mats[k], mats[k] / M_PER_SPOOL))
     lines.extend([
         "",
-        "💰 <b>Затраты за всё время:</b>",
-        "• Прямые (пластик+свет): <b>~%.0f руб.</b> (свет ~%.0f руб.)" % (direct, elec),
-        "• С учетом амортизации: <b>~%.0f руб.</b> (аморт. ~%.0f руб.)" % (direct + depr, depr)
+        t("stats_costs_title"),
+        t("stats_costs_direct", direct, elec),
+        t("stats_costs_depr", direct + depr, depr),
     ])
     return "\n".join(lines)
 
@@ -1541,17 +1563,18 @@ def check_weekly_digest():
         full = direct + (h_7d * DEPRECIATION_PER_HOUR)
         rel_pct = (ok_7d * 100.0 / jobs_7d) if jobs_7d > 0 else 100.0
         lines = [
-            "📅 <b>Еженедельный дайджест принтера:</b>",
-            "• Напечатано за неделю: <b>%.1f ч</b> (КПД %.0f%%)" % (h_7d, min(100.0, h_7d * 100.0 / 168.0)),
-            "• Надежность за неделю: <b>%.0f%%</b> (%d из %d завершено)" % (rel_pct, ok_7d, jobs_7d),
-            "• Расход пластика: <b>%.1f м</b> (~%.1f катушек)" % (m_7d, m_7d / M_PER_SPOOL)
+            t("digest_title"),
+            t("digest_printed", h_7d, min(100.0, h_7d * 100.0 / 168.0)),
+            t("digest_reliability", rel_pct, ok_7d, jobs_7d),
+            t("digest_filament", m_7d, m_7d / M_PER_SPOOL),
         ]
         if w_waste_g > 0:
-            lines.append("• Потери на брак: <b>%.0f г</b> (~%.0f руб.)" % (w_waste_g, w_waste_rub))
+            lines.append(t("digest_waste", w_waste_g, w_waste_rub))
         if week_mats:
-            parts = ["%s: %.1f м (~%.1f кат.)" % (k, week_mats[k], week_mats[k] / M_PER_SPOOL) for k in sorted(week_mats, key=week_mats.get, reverse=True)]
-            lines.append("• По материалам: <b>%s</b>" % ", ".join(parts))
-        lines.append("• Затраты за неделю: <b>~%.0f руб.</b> (свет ~%.0f руб., с аморт. ~%.0f руб.)" % (direct, elec, full))
+            parts = [t("digest_mat_item", k, week_mats[k], week_mats[k] / M_PER_SPOOL)
+                     for k in sorted(week_mats, key=week_mats.get, reverse=True)]
+            lines.append(t("digest_mats", ", ".join(parts)))
+        lines.append(t("digest_costs", direct, elec, full))
         tg_send("\n".join(lines), MAIN_KB)
 
 # ==================== 8. ЗАВЕРШЕНИЕ ПЕЧАТИ ====================
@@ -1618,7 +1641,7 @@ def format_dur(sec):
 
 def format_status():
     st = get_print_stats()
-    if not st: return "⚠️ Принтер недоступен."
+    if not st: return t("printer_unavailable")
     ps, ds = st.get("print_stats", {}), st.get("display_status", {})
     state, fname = ps.get("state", "unknown"), ps.get("filename", "")
     prog, dur = (ds.get("progress", 0) or 0) * 100, ps.get("print_duration", 0) or 0
@@ -1631,18 +1654,18 @@ def format_status():
         "error": t("state_error"),
         "cancelled": t("state_cancelled"),
     }
-    lines = ["📊 <b>Текущий статус:</b>", "• Статус: <b>%s</b>" % s_map.get(state, state)]
+    lines = [t("status_title"), t("status_label", s_map.get(state, t("state_unknown")))]
     if state in ("printing", "paused") and fname:
-        lines.append("• Файл: <b>%s</b>" % esc(fname))
-    p_str = "• Прогресс: <b>%.1f%%</b>" % prog
+        lines.append(t("status_file", esc(fname)))
+    p_str = t("status_progress", prog)
     if info.get("current_layer") is not None and info.get("total_layer"):
-        p_str += " (слой %d из %d)" % (info["current_layer"], info["total_layer"])
+        p_str += t("status_layer", info["current_layer"], info["total_layer"])
     lines.append(p_str)
     est = get_file_meta(fname).get("estimated_time", 0)
     if est > dur:
         rem = est - dur
         end_dt = (datetime.now(timezone.utc) + timedelta(hours=TIMEZONE_OFFSET, seconds=rem)).strftime("%d.%m.%Y %H:%M")
-        lines.extend(["• Осталось: <b>~%s</b>" % format_dur(rem), "• Окончание: <b>~%s</b>" % end_dt])
+        lines.extend([t("remaining", format_dur(rem)), t("eta", end_dt)])
     return "\n".join(lines)
 
 def do_reset(target):
@@ -1736,7 +1759,7 @@ def _handle_update(item):
             if "|" in raw_pg:
                 pref, pg_s, b_cb = raw_pg.split("|", 2)
                 tg_answer_cb(cb_id)
-                out(msg.get("text") or "Выберите катушку:", build_spool_picker(pref, b_cb, int(pg_s)))
+                out(msg.get("text") or t("select_spool"), build_spool_picker(pref, b_cb, int(pg_s)))
         elif data == "lang_en":
             _set_language("en")
             tg_answer_cb(cb_id, "Language switched to English")
@@ -1755,22 +1778,22 @@ def _handle_update(item):
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); view, kb = build_spools_view(); out(view, kb)
         elif data == "sp_add":
             awaiting_spool = True; edit_spool_id = None; tg_answer_cb(cb_id)
-            out("✍️ <b>Новая катушка:</b>\nОтправьте тип, цвет и вес (г).\nПример: <b>PLA Черный матовый 850</b>", {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
+            out(t("new_spool_prompt"), {"inline_keyboard": [[{"text": t("cancel"), "callback_data": "btn_spools"}]]})
         elif data == "sp_edit_menu":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
             if not spools: view, kb = build_spools_view(); out(view, kb)
-            else: out("✏️ <b>Редактирование катушки:</b>\nВыберите катушку из списка:", build_spool_picker("sp_edit_", "btn_spools", 0))
+            else: out(t("edit_spool_prompt"), build_spool_picker("sp_edit_", "btn_spools", 0))
         elif data.startswith("sp_edit_"):
             sid = int(data.split("_").pop()); edit_spool_id = sid; awaiting_spool = False; tg_answer_cb(cb_id)
             sp = next((s for s in (load_state().get("spools") or []) if s.get("id") == sid), None)
-            if sp: out("✏️ <b>Редактирование %s</b> (сейчас %.0f г):\nОтправьте <b>новый вес</b> (например: <b>650</b>) или <b>новое название</b> (например: <b>PLA Темно-зеленый 850</b>):" % (esc(sp_title(sp)), sp["rem_g"]), {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
+            if sp: out(t("edit_spool_detail", esc(sp_title(sp)), sp["rem_g"]), {"inline_keyboard": [[{"text": t("cancel"), "callback_data": "btn_spools"}]]})
         elif data == "sp_ov_menu":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id)
             slots, _, _, _ = get_cfs_slots()
-            rows = [[{"text": "Слот %s (%s)" % (let, hex_to_ru_name(slots[let]["hex"])), "callback_data": "sp_ovslot_%s" % let}] for let in ("A", "B", "C", "D") if let in slots]
-            rows.append([{"text": "⬅️ Назад", "callback_data": "btn_spools"}])
-            out("🔄 <b>Уточнение слота CFS:</b>", {"inline_keyboard": rows})
+            rows = [[{"text": t("slot_button", let, hex_to_ru_name(slots[let]["hex"])), "callback_data": "sp_ovslot_%s" % let}] for let in ("A", "B", "C", "D") if let in slots]
+            rows.append([{"text": t("back"), "callback_data": "btn_spools"}])
+            out(t("refine_cfs"), {"inline_keyboard": rows})
         elif data.startswith("sp_ovslot_"):
             let = data.split("_").pop(); tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
@@ -1778,13 +1801,13 @@ def _handle_update(item):
             else:
                 slots, _, _, _ = get_cfs_slots()
                 p_mat = slots.get(let, {}).get("mat") if let in slots else None
-                title_ov = "📥 <b>Выберите текущую катушку:</b>" if let == "SINGLE" else ("📥 <b>Выберите бобину для Слота %s:</b>" % let)
+                title_ov = t("select_current") if let == "SINGLE" else t("select_slot", let)
                 out(title_ov, build_spool_picker("sp_ovset_%s_" % let, "btn_spools" if let == "SINGLE" else "sp_ov_menu", 0, p_mat))
         elif data.startswith("sp_ovset_"):
             nums = [p for p in data.split("_") if p.isdigit()]
             let = data.split("_")[2]
             if not nums:
-                tg_answer_cb(cb_id, "❌ Ошибка")
+                tg_answer_cb(cb_id, t("error_short"))
                 return
             sid = int(nums.pop())
             slots = get_cfs_slots()[0] if let != "SINGLE" else {}
@@ -1801,17 +1824,17 @@ def _handle_update(item):
                 return True
 
             if mutate_state(_apply):
-                tg_answer_cb(cb_id, "✅ Катушка выбрана" if let == "SINGLE" else "✅ Слот %s уточнен" % let)
+                tg_answer_cb(cb_id, t("spool_selected") if let == "SINGLE" else t("slot_refined", let))
             view, kb = build_spools_view(); out(view, kb)
         elif data == "sp_del_menu":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
             if not spools: view, kb = build_spools_view(); out(view, kb)
-            else: out("🗑 <b>Удаление катушки:</b>\nВыберите катушку из списка:", build_spool_picker("sp_askdel_", "btn_spools", 0))
+            else: out(t("delete_prompt"), build_spool_picker("sp_askdel_", "btn_spools", 0))
         elif data.startswith("sp_askdel_"):
             sid = int(data.split("_").pop()); tg_answer_cb(cb_id)
             sp = next((s for s in (load_state().get("spools") or []) if s.get("id") == sid), None)
-            if sp: out("⚠️ <b>Вы уверены, что хотите удалить катушку?</b>\n• <b>%s</b> (%.0f г)" % (esc(sp_title(sp)), sp["rem_g"]), {"inline_keyboard": [[{"text": "✅ Да, удалить", "callback_data": "sp_confdel_%d" % sid}, {"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
+            if sp: out(t("delete_confirm", esc(sp_title(sp)), sp["rem_g"]), {"inline_keyboard": [[{"text": t("delete_yes"), "callback_data": "sp_confdel_%d" % sid}, {"text": t("cancel"), "callback_data": "btn_spools"}]]})
         elif data.startswith("sp_confdel_"):
             sid = int(data.split("_").pop())
 
@@ -1825,13 +1848,13 @@ def _handle_update(item):
                     st["single_spool_id"] = None
 
             mutate_state(_apply)
-            tg_answer_cb(cb_id, "🗑 Удалено"); view, kb = build_spools_view(); out(view, kb)
+            tg_answer_cb(cb_id, t("deleted")); view, kb = build_spools_view(); out(view, kb)
         elif data == "btn_cons": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out(format_consumables(), MAIN_KB)
-        elif data == "btn_maint": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out("🛠 <b>Обслуживание и смазка:</b>", MAINT_KB)
-        elif data == "btn_resets": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out("🔄 <b>Сброс счетчиков:</b>\n" + format_consumables(), RESET_KB)
-        elif data == "btn_back": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out("🤖 <b>Панель управления принтером:</b>", MAIN_KB)
-        elif data.startswith("rst_"): r_txt = do_reset(data[4:]); tg_answer_cb(cb_id, r_txt); out("🔄 <b>Сброс счетчиков:</b>\n" + format_consumables(), RESET_KB)
-        elif data.startswith("move_"): axis = data[5:]; tg_answer_cb(cb_id, "⏳ Прогон оси %s..." % axis.upper()); threading.Thread(target=_lube_worker, args=(axis,), daemon=True).start()
+        elif data == "btn_maint": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out(t("consumables_view"), MAINT_KB)
+        elif data == "btn_resets": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out(t("reset_counters") + "\n" + format_consumables(), RESET_KB)
+        elif data == "btn_back": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out(t("panel_title"), MAIN_KB)
+        elif data.startswith("rst_"): r_txt = do_reset(data[4:]); tg_answer_cb(cb_id, r_txt); out(t("reset_counters") + "\n" + format_consumables(), RESET_KB)
+        elif data.startswith("move_"): axis = data[5:]; tg_answer_cb(cb_id, t("moving_axis", axis.upper())); threading.Thread(target=_lube_worker, args=(axis,), daemon=True).start()
         return
     msg = item.get("message", {})
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
@@ -1871,7 +1894,7 @@ def _handle_update(item):
         if mutate_state(_apply):
             edit_spool_id = None
             view, kb = build_spools_view()
-            tg_send("✅ Катушка <b>%s</b> (%.0f г) обновлена!\n" % (esc(sp_title(updated)), updated.get("rem_g", 0)) + view, kb)
+            tg_send(t("spool_updated", esc(sp_title(updated)), updated.get("rem_g", 0)) + view, kb)
             return
     if awaiting_spool and not txt.startswith("/"):
         parts = raw_txt.split()
@@ -1898,18 +1921,18 @@ def _handle_update(item):
                 mutate_state(_apply)
                 awaiting_spool = False
                 view, kb = build_spools_view()
-                tg_send("✅ Катушка <b>%s</b> (%.0f г) добавлена!\n" % (esc(sp_title(created)), grams) + view, kb)
+                tg_send(t("spool_added", esc(sp_title(created)), grams) + view, kb)
                 return
             except Exception:
                 pass
-        tg_send("⚠️ Формат: <b>PLA Черный матовый 850</b>", {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
+        tg_send(t("spool_format"), {"inline_keyboard": [[{"text": t("cancel"), "callback_data": "btn_spools"}]]})
         return
-        tg_send("⚠️ Формат: <b>PLA Черный матовый 850</b>", {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]}); return
+        tg_send(t("spool_format"), {"inline_keyboard": [[{"text": t("cancel"), "callback_data": "btn_spools"}]]}); return
     if txt.startswith("/stats"): tg_send(format_stats(), MAIN_KB)
     elif txt.startswith("/consumables"): tg_send(format_consumables(), MAIN_KB)
     elif txt.startswith("/status"): send_usb_photo(format_status(), MAIN_KB)
     elif txt.startswith("/spools"): view, kb = build_spools_view(); tg_send(view, kb)
-    elif txt.startswith(("/start", "/help")): awaiting_spool = False; edit_spool_id = None; tg_send("🤖 <b>Панель управления принтером:</b>", MAIN_KB)
+    elif txt.startswith(("/start", "/help")): awaiting_spool = False; edit_spool_id = None; tg_send(t("panel_title"), MAIN_KB)
 
 # ==================== 11. WEB-СЕРВЕР MINI APP ====================
 WEBAPP_FILE = os.path.join(BASE_DIR, "webapp.html")
@@ -2007,7 +2030,7 @@ def build_webapp_payload():
                     "slot": let, "active": (let == active_let), "hex": "#" + s_i["hex"],
                     "mat": s_i["mat"], "color_name": hex_to_ru_name(s_i["hex"]),
                     "spool_id": sp["id"] if sp else None,
-                    "spool_title": sp_title(sp) if sp else "Не назначена",
+                    "spool_title": sp_title(sp) if sp else t("not_assigned"),
                     "rem_g": sp["rem_g"] if sp else 0
                 })
     h_tot = totals.get("total_time", 0) / 3600.0
@@ -2156,47 +2179,77 @@ def _load_manifest(raw):
     }
 
 
-def check_for_updates():
-    """Проверка обновлений: маленький version.txt, затем манифест.
-    Update check: fetch the tiny version.txt first, then the manifest."""
+_last_check = {"error": "", "version": "", "ts": 0.0}
+
+
+def _remote_version_from_code(raw):
+    """Резервный путь: версия из исходника, если version.txt нет.
+    Fallback: read VERSION from the source when version.txt is missing."""
     try:
-        best_version, best_base = None, None
-        for base in _update_bases():
-            url = "%s/version.txt?v=%d" % (base, int(time.time()))
+        m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', raw.decode("utf-8", "ignore"),
+                      re.MULTILINE)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def check_for_updates():
+    """Проверка обновлений: version.txt (fallback — VERSION в .py), затем манифест.
+    Update check: version.txt (fallback to VERSION in .py), then the manifest.
+    Причина сбоя сохраняется в _last_check["error"] и показывается в панели."""
+    _last_check["error"] = ""
+    _last_check["ts"] = time.time()
+    errors = []
+    best_version, best_base = None, None
+    for base in _update_bases():
+        stamp = int(time.time())
+        remote = ""
+        try:
+            raw = _http_get("%s/version.txt?v=%d" % (base, stamp), 10)
+            remote = raw.decode("utf-8", "ignore").strip().splitlines()[0].strip() if raw else ""
+        except Exception as e:
+            errors.append("version.txt @ %s: %s" % (base, e))
+        if not remote:
+            # Старые репозитории без version.txt / repositories without version.txt.
             try:
-                raw = _http_get(url, 10).decode("utf-8", "ignore").strip()
+                raw = _http_get("%s/printer_tg_bot.py?v=%d" % (base, stamp), 25)
+                remote = _remote_version_from_code(raw)
             except Exception as e:
-                log.warning("version.txt недоступен / unavailable: %s (%s)", url, e)
-                continue
-            remote = raw.splitlines()[0].strip() if raw else ""
-            if not remote:
-                continue
-            if best_version is None or _parse_version(remote) > _parse_version(best_version):
-                best_version, best_base = remote, base
-        if not best_version:
-            return None
-        if _parse_version(best_version) <= _parse_version(VERSION):
-            log.info("Обновлений нет: %s (локально %s) / up to date", best_version, VERSION)
-            return None
-        raw_manifest, manifest_src = _fetch_first("manifest.json?v=%s" % best_version, 15)
-        if not raw_manifest:
-            log.warning("manifest.json недоступен / manifest unavailable: %s", manifest_src)
-            return None
-        manifest = _load_manifest(raw_manifest)
-        if manifest["version"] != best_version:
-            log.warning("Версия манифеста %s не совпадает с version.txt %s",
-                        manifest["version"], best_version)
-            return None
-        if _parse_version(VERSION) < _parse_version(manifest["min_version"]):
-            log.warning("Обновление требует минимум v%s — нужна переустановка",
-                        manifest["min_version"])
-            return None
-        log.info("Доступно обновление: %s -> %s (источник %s)",
-                 VERSION, manifest["version"], best_base)
-        return {"version": manifest["version"], "manifest": manifest}
-    except Exception as e:
-        log.warning("Ошибка проверки обновлений / update check failed: %s", e)
+                errors.append("printer_tg_bot.py @ %s: %s" % (base, e))
+        if not remote:
+            continue
+        if best_version is None or _parse_version(remote) > _parse_version(best_version):
+            best_version, best_base = remote, base
+    if not best_version:
+        _last_check["error"] = "источники недоступны / sources unavailable: " + "; ".join(errors[:2])
+        log.warning("OTA: %s", _last_check["error"])
         return None
+    _last_check["version"] = best_version
+    if _parse_version(best_version) <= _parse_version(VERSION):
+        log.info("Обновлений нет: %s (локально %s) / up to date", best_version, VERSION)
+        return None
+    raw_manifest, manifest_src = _fetch_first("manifest.json?v=%s" % best_version, 15)
+    if not raw_manifest:
+        _last_check["error"] = "manifest.json: %s" % manifest_src
+        log.warning("OTA: %s", _last_check["error"])
+        return None
+    try:
+        manifest = _load_manifest(raw_manifest)
+    except Exception as e:
+        _last_check["error"] = "manifest.json: %s" % e
+        log.warning("OTA: битый manifest.json / bad manifest: %s", e)
+        return None
+    if manifest["version"] != best_version:
+        _last_check["error"] = "манифест %s != version.txt %s" % (manifest["version"], best_version)
+        log.warning("OTA: %s", _last_check["error"])
+        return None
+    if _parse_version(VERSION) < _parse_version(manifest["min_version"]):
+        _last_check["error"] = "требуется версия не ниже %s" % manifest["min_version"]
+        log.warning("OTA: %s", _last_check["error"])
+        return None
+    log.info("Доступно обновление: %s -> %s (источник %s)",
+             VERSION, manifest["version"], best_base)
+    return {"version": manifest["version"], "manifest": manifest}
 
 
 _update_lock = threading.Lock()
@@ -2453,7 +2506,8 @@ class WebAppHandler(BaseHTTPRequestHandler):
                                           "new_version": update["version"]})
                 else:
                     self._send_json(200, {"ok": True, "has_update": False,
-                                          "current_version": VERSION})
+                                          "current_version": VERSION,
+                                          "error": _last_check.get("error", "")})
             elif path == "/api/update/apply":
                 update = check_for_updates()
                 if update:
@@ -2820,7 +2874,7 @@ def _tunnel_worker():
                         log.info("Mini App URL: %s", url)
                         res = tg_api("setChatMenuButton", {
                             "chat_id": CHAT_ID,
-                            "menu_button": json.dumps({"type": "web_app", "text": "📱 Панель", "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
+                            "menu_button": json.dumps({"type": "web_app", "text": t("webapp_panel"), "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
                         })
                         log.info("setChatMenuButton: %s", res)
             proc.wait()

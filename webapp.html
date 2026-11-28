@@ -602,6 +602,7 @@
         "light_btn": "💡 Свет",
         "reload_btn": "🔄 Обновить",
         "update_progress": "Обновление: %s",
+        "update_checking_now": "Проверяю обновления...",
         "update_started": "Обновление запущено, скачиваю файлы...",
         "update_restarting": "Бот перезапускается...",
         "update_failed": "Ошибка обновления",
@@ -707,6 +708,7 @@
         "light_btn": "💡 Light",
         "reload_btn": "🔄 Refresh",
         "update_progress": "Updating: %s",
+        "update_checking_now": "Checking for updates...",
         "update_started": "Update started, downloading files...",
         "update_restarting": "Bot is restarting...",
         "update_failed": "Update failed",
@@ -1281,16 +1283,27 @@
     }
 
     function checkUpdate() {
+      const status = document.getElementById('update-status');
+      if (status) {
+        status.style.display = 'block';
+        status.textContent = t('update_checking_now');
+      }
       apiGet('/api/update/check').then(r => {
         const btn = document.getElementById('btn-install');
         if (r.has_update) {
           btn.style.display = 'block';
+          btn.disabled = false;
           btn.textContent = t('update_install') + ' v' + r.new_version;
+          if (status) status.textContent = t('update_available') + ': v' + r.new_version;
+          if (tg && tg.showAlert) tg.showAlert(t('update_available') + ': v' + r.new_version);
         } else {
           btn.style.display = 'none';
-          if (tg && tg.showAlert) tg.showAlert(t('update_latest'));
+          const msg = (r && r.error) ? (t('update_error') + ': ' + r.error) : t('update_latest');
+          if (status) status.textContent = msg;
+          if (tg && tg.showAlert) tg.showAlert(msg);
         }
       }).catch(() => {
+        if (status) status.textContent = t('update_error');
         if (tg && tg.showAlert) tg.showAlert(t('update_error'));
       });
     }
