@@ -578,6 +578,9 @@
     if (tg) { tg.ready(); tg.expand(); }
 
     const API_KEY = new URLSearchParams(window.location.search).get('key') || '';
+    // Подписанный initData — второй (и предпочтительный) способ авторизации.
+    // Signed initData is the preferred auth mechanism when available.
+    const TG_INIT_DATA = tg ? (tg.initData || '') : '';
     let STATE = null;
     let currentLang = localStorage.getItem('printer_lang') || 'ru';
     const DEFAULT_SPOOL_WEIGHT = 1000;
@@ -853,15 +856,25 @@
     }
 
     // ==================== API ====================
+    function authQuery() {
+      const parts = [];
+      if (API_KEY) parts.push('key=' + encodeURIComponent(API_KEY));
+      if (TG_INIT_DATA) parts.push('initData=' + encodeURIComponent(TG_INIT_DATA));
+      return parts.join('&');
+    }
+    function withAuth(url) {
+      const q = authQuery();
+      if (!q) return url;
+      return url + (url.includes('?') ? '&' : '?') + q;
+    }
     function apiGet(url) {
-      return fetch(url + (API_KEY ? (url.includes('?') ? '&' : '?') + 'key=' + API_KEY : ''))
-        .then(r => r.json());
+      return fetch(withAuth(url)).then(r => r.json());
     }
     function apiPost(url, body) {
-      return fetch(url + (API_KEY ? (url.includes('?') ? '&' : '?') + 'key=' + API_KEY : ''), {
+      return fetch(withAuth(url), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body || {})
       }).then(r => r.json());
     }
 
@@ -924,7 +937,7 @@
 
     function refreshCam() {
       const img = document.getElementById('cam-img');
-      img.src = '/api/cam.jpg' + (API_KEY ? '?key=' + API_KEY : '') + '&t=' + Date.now();
+      img.src = '/api/cam.jpg?' + authQuery() + '&t=' + Date.now();
     }
 
     function sendCmd(cmd) {

@@ -88,7 +88,20 @@ sh /root/printer_tg_bot/uninstall.sh
 
 * `printer_tg_bot.py` — core monitoring daemon and embedded HTTP server for Telegram Mini App.
 * `webapp.html` — responsive single-page Telegram Mini App UI.
-* `config.ini` — default thresholds and pricing (safely updated during OTA updates).
-* `secrets.ini` — your personal `token` and `chat_id` (created during setup, preserved across updates).
-* `printer_state.json` — local spool inventory, usage stats, and custom settings from Mini App.
-* `install.sh` / `uninstall.sh` — one-line installer and clean removal scripts.
+* `config.ini` — default thresholds and pricing (never overwritten by updates).
+* `secrets.ini` — your personal `token`, `chat_id` and optional `allowed_users` (created during setup, preserved across updates).
+* `printer_state.json` — local spool inventory, usage stats, and custom settings from Mini App (`printer_state.json.bak` is kept as a backup).
+* `install.sh` / `uninstall.sh` — installer and clean removal scripts (Python-only downloads, no `curl`/`wget` needed).
+* `fetch.py` — pure-Python downloader with `sha256` verification, used by the installer.
+* `manifest.json` + `version.txt` — OTA manifest (file list with hashes) and the current version.
+* `gen_manifest.py` — regenerates `manifest.json` before a release (`python3 gen_manifest.py`).
+
+### 🔐 Security notes / Безопасность
+
+* The Mini App accepts only the panel secret (`?key=`) or a signed Telegram `initData`; the `Referer` header is never trusted.
+* `initData` older than 24 hours is rejected; only `chat_id` (and `allowed_users`, if set) may open the panel.
+* OTA downloads every file to `update_staging/`, verifies `sha256` from `manifest.json`, compiles the backend in memory, and rolls back on any failure.
+
+* Mini App принимает только секрет панели (`?key=`) или подписанный Telegram `initData`; заголовок `Referer` не используется.
+* `initData` старше 24 часов отклоняется; панель доступна только `chat_id` (и `allowed_users`, если задан).
+* OTA скачивает файлы в `update_staging/`, сверяет `sha256` из `manifest.json`, компилирует бэкенд в памяти и откатывается при любой ошибке.

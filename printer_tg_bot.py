@@ -1,30 +1,117 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import json, os, sys, time, uuid, threading, urllib.request, urllib.parse, logging, configparser, py_compile, fcntl
-import hmac, hashlib, subprocess, re
+import json, os, sys, time, uuid, threading, urllib.request, urllib.parse, logging, configparser
+import hmac, hashlib, subprocess, re, shutil, copy
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-VERSION = "1.0.7"
+try:
+    import fcntl
+except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
+    fcntl = None
 
-# ==================== STATE CACHE ====================
-state_lock = threading.Lock()
+VERSION = "1.1.0"
+
+# ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
+# Единственный безопасный способ изменить состояние — mutate_state().
+# Прямое «load_state() -> правка -> save_state()» теряет данные, если в этот
+# момент состояние пишет другой поток (главный цикл и Mini App одновременно).
+# mutate_state() is the only safe way to change state: plain
+# load_state() -> edit -> save_state() loses updates when another thread
+# (monitor loop and Mini App) writes state at the same time.
+log = logging.getLogger("printer_tg_bot")
+state_lock = threading.RLock()
+_state_cache = {"data": None, "sig": None}
+
+
+def _state_signature():
+    """Отпечаток файла состояния для инвалидации кэша.
+    File signature used to invalidate the in-memory cache."""
+    try:
+        st = os.stat(STATE_FILE)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _read_state_file(path):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("state root must be a JSON object")
+    return data
+
+
+def _write_state_file(path, data):
+    """Атомарная запись: tmp -> fsync -> .bak -> replace -> fsync(dir).
+    Atomic write with backup, safe against power loss."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    if os.path.exists(path):
+        try:
+            shutil.copyfile(path, path + ".bak")
+        except OSError:
+            pass
+    os.replace(tmp, path)
+    try:
+        dfd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 def load_state():
+    """Читает состояние из кэша или с диска (с откатом на .bak).
+    Reads state from cache or disk, falling back to the .bak copy."""
     with state_lock:
-        if os.path.exists(STATE_FILE):
+        sig = _state_signature()
+        if _state_cache["data"] is not None and _state_cache["sig"] == sig:
+            return copy.deepcopy(_state_cache["data"])
+        data = {}
+        if sig is not None:
             try:
-                with open(STATE_FILE, "r") as f: return json.load(f)
-            except Exception: pass
-        return {}
+                data = _read_state_file(STATE_FILE)
+            except Exception as e:
+                log.error("Не удалось прочитать %s: %s / cannot read state: %s", STATE_FILE, e, e)
+                try:
+                    data = _read_state_file(STATE_FILE + ".bak")
+                    log.warning("Состояние восстановлено из .bak / state restored from backup")
+                except Exception:
+                    data = {}
+        _state_cache["data"] = data
+        _state_cache["sig"] = sig
+        return copy.deepcopy(data)
+
 
 def save_state(data):
+    """Атомарно сохраняет состояние, не скрывая ошибок.
+    Persists state atomically and never hides write errors."""
     with state_lock:
         try:
-            tmp = STATE_FILE + ".tmp"
-            with open(tmp, "w") as f: json.dump(data, f)
-            os.replace(tmp, STATE_FILE)
-        except Exception: pass
+            _write_state_file(STATE_FILE, data)
+        except Exception as e:
+            log.exception("Не удалось сохранить состояние / cannot save state: %s", e)
+            return False
+        _state_cache["data"] = copy.deepcopy(data)
+        _state_cache["sig"] = _state_signature()
+        return True
+
+
+def mutate_state(mutator):
+    """Атомарно: прочитать -> изменить -> записать под одним локом.
+    Atomically read-modify-write the state under a single lock."""
+    with state_lock:
+        data = load_state()
+        result = mutator(data)
+        save_state(data)
+        return result
 # ==================== МУЛЬТИЯЗЫЧНОСТЬ (RU / EN) ====================
 LANG = {
     "ru": {
@@ -355,6 +442,25 @@ LANG = {
     }
 }
 
+def _set_language(lang):
+    """Сохраняет язык и пересобирает все клавиатуры.
+    Persists the language and rebuilds every keyboard."""
+    lang = "en" if lang == "en" else "ru"
+
+    def _apply(st):
+        settings = st.get("settings") or {}
+        settings["language"] = lang
+        st["settings"] = settings
+
+    mutate_state(_apply)
+    global MAIN_KB, WELCOME_KB, MAINT_KB, RESET_KB
+    MAIN_KB = get_main_kb()
+    WELCOME_KB = get_welcome_kb()
+    MAINT_KB = get_maint_kb()
+    RESET_KB = get_reset_kb()
+    return lang
+
+
 def get_language():
     """Возвращает текущий язык из настроек (по умолчанию 'ru')."""
     st = load_state()
@@ -391,7 +497,8 @@ SECRETS_FILE = os.path.join(BASE_DIR, "secrets.ini")
 STATE_FILE = os.path.join(BASE_DIR, "printer_state.json")
 
 TOKEN = ""
-CHAT_ID = "210754903"
+CHAT_ID = ""
+ALLOWED_USERS = ""
 MOONRAKER = "http://localhost:7125"
 POLL_INTERVAL = 5
 TIMEZONE_OFFSET = 7
@@ -412,6 +519,7 @@ PRINTER_POWER_KW = 0.25
 DEPRECIATION_PER_HOUR = 10
 G_PER_M_DEFAULT = 2.98
 M_PER_SPOOL = 335.0
+DEFAULT_SPOOL_WEIGHT = 1000.0
 DENSITY_G_PER_M = {
     "PLA": 2.98, "PETG": 3.06, "ABS": 2.53, "ASA": 2.60, "TPU": 2.90,
     "PC": 2.98, "NYLON": 2.95, "PA": 2.95, "PA-CF": 2.70, "HIPS": 2.55,
@@ -422,6 +530,10 @@ CUSTOM_TIMELAPSE_DIR = ""
 USE_CLOUDFLARED = True
 WEBAPP_PORT = 8088
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
+GITHUB_MIRROR_BASE = "https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main"
+MANIFEST_FILE = os.path.join(BASE_DIR, "manifest.json")
+UPDATE_STAGING = os.path.join(BASE_DIR, "update_staging")
+UPDATE_BACKUP = os.path.join(BASE_DIR, "update_backup")
 
 if os.path.exists(SECRETS_FILE) or os.path.exists(CONFIG_FILE):
     config = configparser.ConfigParser()
@@ -429,6 +541,7 @@ if os.path.exists(SECRETS_FILE) or os.path.exists(CONFIG_FILE):
     config.read(SECRETS_FILE)
     if config.has_option("telegram", "token"): TOKEN = config.get("telegram", "token")
     if config.has_option("telegram", "chat_id"): CHAT_ID = config.get("telegram", "chat_id")
+    if config.has_option("telegram", "allowed_users"): ALLOWED_USERS = config.get("telegram", "allowed_users")
     if config.has_option("printer", "moonraker_url"): MOONRAKER = config.get("printer", "moonraker_url")
     if config.has_option("printer", "poll_interval"): POLL_INTERVAL = config.getint("printer", "poll_interval")
     if config.has_option("printer", "timezone_offset"): TIMEZONE_OFFSET = config.getint("printer", "timezone_offset")
@@ -458,10 +571,32 @@ _handler = RotatingFileHandler(os.path.join(BASE_DIR, "printer_tg_bot.log"), max
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 log.addHandler(_handler)
 
-if not TOKEN or not CHAT_ID:
-    log.critical("ERROR: token or chat_id missing! Check secrets.ini")
-    print("ERROR: token or chat_id missing! Check secrets.ini")
+# Источники обновлений: raw первым (свежий), jsDelivr как fallback (доступность).
+# Update sources: raw first (fresh), jsDelivr as fallback (reachability).
+UPDATE_BASES = []
+for _base in (GITHUB_RAW_BASE, GITHUB_MIRROR_BASE):
+    _base = (_base or "").rstrip("/")
+    if _base and _base not in UPDATE_BASES:
+        UPDATE_BASES.append(_base)
+
+
+def _startup_fail(msg_ru, msg_en):
+    """Понятная ошибка конфигурации вместо молчаливого запуска.
+    Fail fast with a readable message instead of starting misconfigured."""
+    log.critical("%s / %s", msg_ru, msg_en)
+    print("ERROR: %s\nERROR: %s" % (msg_ru, msg_en))
     sys.exit(1)
+
+
+if not TOKEN or not CHAT_ID:
+    _startup_fail("в secrets.ini не заданы token или chat_id",
+                  "token or chat_id is missing in secrets.ini")
+if not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", TOKEN):
+    _startup_fail("token не похож на токен из @BotFather",
+                  "token does not look like a @BotFather token")
+if not re.match(r"^-?\d+$", str(CHAT_ID)):
+    _startup_fail("chat_id должен быть числом (для групп — отрицательным)",
+                  "chat_id must be a number (negative for groups)")
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 last_state = None
@@ -956,30 +1091,42 @@ def get_used_slots(filename, meta, slots, active_let, total_w=0):
     return used
 
 def check_cfs_humidity():
-    if not HAS_CFS: return
+    if not HAS_CFS:
+        return
     try:
         _, _, temp, hum = get_cfs_slots()
         hum_val = int(float(str(hum)))
-        if hum_val > CFS_HUMIDITY_LIMIT:
-            st = load_state()
-            if time.time() - st.get("last_hum_warn_ts", 0) >= 86400:
-                st["last_hum_warn_ts"] = time.time()
-                save_state(st)
-                tg_send(t("cfs_humidity_warn", hum_val, temp), MAIN_KB)
+        if hum_val <= CFS_HUMIDITY_LIMIT:
+            return
+        should_warn = [False]
+
+        def _apply(st):
+            if time.time() - st.get("last_hum_warn_ts", 0) < 86400:
+                return
+            st["last_hum_warn_ts"] = time.time()
+            should_warn[0] = True
+
+        mutate_state(_apply)
+        if should_warn[0]:
+            tg_send(t("cfs_humidity_warn", hum_val, temp), MAIN_KB)
     except Exception:
         pass
 
 def resolve_slot_spool(st, letter, mat="PLA", hx="000000", auto_create=True):
+    """Ищет/создаёт катушку для слота, работая только с переданным состоянием.
+    Функция не сохраняет состояние: запись делает вызывающий через mutate_state().
+    Resolves or creates the spool for a slot using the given state only.
+    It never persists: the caller writes through mutate_state()."""
     spools = st.get("spools") or []
     if letter == "SINGLE":
         cur_id = st.get("single_spool_id")
         sp = next((s for s in spools if s.get("id") == cur_id and s.get("rem_g", 0) > 0), None)
-        if sp: return sp
+        if sp:
+            return sp
         avail = [s for s in spools if s.get("rem_g", 0) > 0]
         if avail:
             avail.sort(key=lambda x: x.get("id", 0))
-            st["single_spool_id"] = avail.pop(0)["id"]
-            save_state(st)
+            st["single_spool_id"] = avail[0]["id"]
             return next((s for s in spools if s.get("id") == st["single_spool_id"]), None)
         return None
     ov_map = st.get("slot_overrides") or {}
@@ -987,47 +1134,55 @@ def resolve_slot_spool(st, letter, mat="PLA", hx="000000", auto_create=True):
     if ov:
         if ov.get("hex") == hx and ov.get("mat") == mat:
             sp = next((s for s in spools if s.get("id") == ov.get("id") and s.get("rem_g", 0) > 0), None)
-            if sp: return sp
+            if sp:
+                return sp
         del ov_map[letter]
         st["slot_overrides"] = ov_map
-        save_state(st)
     exact = hex_to_ru_name(hx)
     grp = normalize_color_group(hx)
     matches = [s for s in spools if s.get("mat") == mat and normalize_color_group(s.get("group") or s.get("name") or s.get("hex")) == grp and s.get("rem_g", 0) > 0]
     if matches:
         matches.sort(key=lambda x: (0 if exact.lower() in str(x.get("name") or "").lower() else 1, x.get("id", 0)))
-        return matches.pop(0)
-    if not auto_create: return None
+        return matches[0]
+    if not auto_create:
+        return None
     next_id = max([s.get("id", 0) for s in spools], default=0) + 1
-    new_sp = {"id": next_id, "mat": mat, "name": exact, "group": grp, "hex": hx, "rem_g": 1000.0}
+    new_sp = {"id": next_id, "mat": mat, "name": exact, "group": grp, "hex": hx, "rem_g": DEFAULT_SPOOL_WEIGHT}
     spools.append(new_sp)
     st["spools"] = spools
-    save_state(st)
     return new_sp
 
 def deduct_spool_weight(filename, meta, weight_g):
-    if weight_g <= 0 or not cfg("spool_tracking"): return ""
+    """Списывает пластик с катушек атомарно (одна транзакция состояния).
+    Deducts filament weight in a single state transaction."""
+    if weight_g <= 0 or not cfg("spool_tracking"):
+        return ""
     slots, active_let, _, _ = get_cfs_slots()
-    st = load_state()
     used = get_used_slots(filename, meta, slots, active_let, weight_g)
     raw_sum = sum(g for _, g in used)
     scale = (weight_g / raw_sum) if raw_sum > 0 else 1.0
     notes = []
-    for let, part_g in used:
-        slot = slots.get(let) or {"mat": "PLA", "hex": "000000"}
-        left_to_sub = part_g * scale
-        while left_to_sub > 0.1:
-            sp = resolve_slot_spool(st, let, slot["mat"], slot["hex"], auto_create=HAS_CFS)
-            if not sp: break
-            take = min(sp["rem_g"], left_to_sub)
-            sp["rem_g"] = round(max(0.0, sp["rem_g"] - take), 1)
-            left_to_sub -= take
-            notes.append("%s: осталось <b>%.0f г</b>" % (sp_title(sp), sp["rem_g"]))
-    ov_map = st.get("slot_overrides") or {}
-    for let, _ in used:
-        ov_map.pop(let, None)
-    st["slot_overrides"] = ov_map
-    save_state(st)
+
+    def _apply(st):
+        for let, part_g in used:
+            slot = slots.get(let) or {"mat": "PLA", "hex": "000000"}
+            left_to_sub = part_g * scale
+            guard = 0
+            while left_to_sub > 0.1 and guard < 8:
+                guard += 1
+                sp = resolve_slot_spool(st, let, slot["mat"], slot["hex"], auto_create=HAS_CFS)
+                if not sp:
+                    break
+                take = min(sp["rem_g"], left_to_sub)
+                sp["rem_g"] = round(max(0.0, sp["rem_g"] - take), 1)
+                left_to_sub -= take
+                notes.append("%s: осталось <b>%.0f г</b>" % (sp_title(sp), sp["rem_g"]))
+        overrides = st.get("slot_overrides") or {}
+        for let, _ in used:
+            overrides.pop(let, None)
+        st["slot_overrides"] = overrides
+
+    mutate_state(_apply)
     return "\n".join("• Катушка " + n for n in notes)
 
 def build_spools_view():
@@ -1113,59 +1268,74 @@ def detect_material_types(meta, fname=""):
     return ["PLA"]
 
 def record_material_usage(meta, used_mm, fname=""):
+    """Учитывает расход пластика по типам атомарно.
+    Records filament usage per material in one transaction."""
     if used_mm <= 0: used_mm = meta.get("filament_total", 0) or 0
     if used_mm <= 0: return
     types = detect_material_types(meta, fname)
-    st = load_state()
-    mats, w_mats = st.get("materials_meters", {}), st.get("week_materials", {})
     share = (used_mm / 1000.0) / len(types)
-    for t in types:
-        mats[t] = mats.get(t, 0.0) + share
-        w_mats[t] = w_mats.get(t, 0.0) + share
-    st["materials_meters"], st["week_materials"] = mats, w_mats
-    save_state(st)
+
+    def _apply(st):
+        mats = st.get("materials_meters", {})
+        w_mats = st.get("week_materials", {})
+        for mat in types:
+            mats[mat] = mats.get(mat, 0.0) + share
+            w_mats[mat] = w_mats.get(mat, 0.0) + share
+        st["materials_meters"], st["week_materials"] = mats, w_mats
+
+    mutate_state(_apply)
 
 def record_waste(weight_g, direct_rub):
+    """Учитывает потери на брак атомарно.
+    Records failed-print waste in one transaction."""
     if weight_g <= 0.5 and direct_rub <= 0.5: return
-    st = load_state()
-    st["waste_g"] = round(st.get("waste_g", 0.0) + weight_g, 1)
-    st["waste_rub"] = round(st.get("waste_rub", 0.0) + direct_rub, 1)
-    st["week_waste_g"] = round(st.get("week_waste_g", 0.0) + weight_g, 1)
-    st["week_waste_rub"] = round(st.get("week_waste_rub", 0.0) + direct_rub, 1)
-    save_state(st)
+
+    def _apply(st):
+        st["waste_g"] = round(st.get("waste_g", 0.0) + weight_g, 1)
+        st["waste_rub"] = round(st.get("waste_rub", 0.0) + direct_rub, 1)
+        st["week_waste_g"] = round(st.get("week_waste_g", 0.0) + weight_g, 1)
+        st["week_waste_rub"] = round(st.get("week_waste_rub", 0.0) + direct_rub, 1)
+
+    mutate_state(_apply)
 
 def update_and_check_counters(total_hours, total_meters, add_cuts=0):
-    st = load_state()
-    changed = False
-    last_m = st.get("last_maint_hours", 0)
-    if last_m == 0 and total_hours >= MAINT_INTERVAL_HOURS:
-        st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
-        changed = True
-    elif total_hours - last_m >= MAINT_INTERVAL_HOURS:
-        st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
-        changed = True
-        tg_send(t("maint_due", total_hours), MAIN_KB)
-    checks = [
-        ("nozzle_start_meters", "nozzle_warned", total_meters, NOZZLE_LIMIT_METERS, "⚠️ <b>Ресурс сопла выработан!</b>\nПробег: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
-        ("filter_start_hours", "filter_warned", total_hours, FILTER_LIMIT_HOURS, "🌬 <b>Пора заменить фильтр воздуха!</b>\nНаработка фильтра: <b>%.1f / %d ч</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
-        ("ptfe_start_meters", "ptfe_warned", total_meters, PTFE_LIMIT_METERS, "➰ <b>Проверьте PTFE-трубку!</b>\nПробег филамента через трубку: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.")
-    ]
-    for start_k, warn_k, cur_val, limit_val, msg_tpl in checks:
-        if start_k not in st:
-            st[start_k], st[warn_k], changed = cur_val, False, True
-        else:
-            used = max(0.0, cur_val - st[start_k])
-            if used >= limit_val and not st.get(warn_k, False):
-                st[warn_k], changed = True, True
-                tg_send(msg_tpl % (used, limit_val), MAIN_KB)
-    if add_cuts > 0:
-        st["cutter_cuts"], changed = st.get("cutter_cuts", 0) + add_cuts, True
-        cuts = st.get("cutter_cuts", 0)
-        if cuts >= CUTTER_LIMIT_CUTS and not st.get("cutter_warned", False):
-            st["cutter_warned"], changed = True, True
-            tg_send("✂️ <b>Пора проверить лезвие резака филамента!</b>\nВыполнено резов: <b>%d / %d</b>.\nПосле замены сбросьте счетчик в меню Обслуживание." % (cuts, CUTTER_LIMIT_CUTS), MAIN_KB)
-    if changed:
-        save_state(st)
+    """Обновляет счётчики ТО и собирает уведомления для отправки после записи.
+    Updates maintenance counters and returns notifications to send afterwards."""
+    messages = []
+
+    def _apply(st):
+        last_m = st.get("last_maint_hours", 0)
+        if last_m == 0 and total_hours >= MAINT_INTERVAL_HOURS:
+            st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
+        elif total_hours - last_m >= MAINT_INTERVAL_HOURS:
+            st["last_maint_hours"] = (int(total_hours) // MAINT_INTERVAL_HOURS) * MAINT_INTERVAL_HOURS
+            messages.append(t("maint_due", total_hours))
+        checks = [
+            ("nozzle_start_meters", "nozzle_warned", total_meters, NOZZLE_LIMIT_METERS, "⚠️ <b>Ресурс сопла выработан!</b>\nПробег: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
+            ("filter_start_hours", "filter_warned", total_hours, FILTER_LIMIT_HOURS, "🌬 <b>Пора заменить фильтр воздуха!</b>\nНаработка фильтра: <b>%.1f / %d ч</b>.\nПосле замены сбросьте счетчик в меню Обслуживание."),
+            ("ptfe_start_meters", "ptfe_warned", total_meters, PTFE_LIMIT_METERS, "➰ <b>Проверьте PTFE-трубку!</b>\nПробег филамента через трубку: <b>%.1f / %d м</b>.\nПосле замены сбросьте счетчик в меню Обслуживание.")
+        ]
+        for start_k, warn_k, cur_val, limit_val, msg_tpl in checks:
+            if start_k not in st:
+                st[start_k], st[warn_k] = cur_val, False
+            else:
+                used = max(0.0, cur_val - st[start_k])
+                if used >= limit_val and not st.get(warn_k, False):
+                    st[warn_k] = True
+                    messages.append(msg_tpl % (used, limit_val))
+        if add_cuts > 0:
+            st["cutter_cuts"] = st.get("cutter_cuts", 0) + add_cuts
+            cuts = st["cutter_cuts"]
+            if cuts >= CUTTER_LIMIT_CUTS and not st.get("cutter_warned", False):
+                st["cutter_warned"] = True
+                messages.append("✂️ <b>Пора проверить лезвие резака филамента!</b>\nВыполнено резов: <b>%d / %d</b>.\nПосле замены сбросьте счетчик в меню Обслуживание." % (cuts, CUTTER_LIMIT_CUTS))
+
+    mutate_state(_apply)
+    for msg in messages:
+        try:
+            tg_send(msg, MAIN_KB)
+        except Exception:
+            log.warning("Не удалось отправить уведомление ТО / maintenance notify failed")
 
 def update_counters(cuts=0):
     totals = get_history_totals()
@@ -1272,9 +1442,17 @@ def check_weekly_digest():
         h_7d, _, m_7d, jobs_7d, ok_7d, _, fallback_mats = analyze_history(get_history_list(500))
         week_mats = st.get("week_materials") or fallback_mats
         w_waste_g, w_waste_rub = st.get("week_waste_g", 0.0), st.get("week_waste_rub", 0.0)
-        st["last_digest_date"], st["week_materials"] = today_str, {}
-        st["week_waste_g"], st["week_waste_rub"] = 0.0, 0.0
-        save_state(st)
+
+        def _reset_week(state):
+            # Повторная проверка под локом: дайджест мог уйти из другого потока.
+            # Re-check under the lock: another thread may have sent the digest.
+            if state.get("last_digest_date") == today_str:
+                return
+            state["last_digest_date"] = today_str
+            state["week_materials"] = {}
+            state["week_waste_g"], state["week_waste_rub"] = 0.0, 0.0
+
+        mutate_state(_reset_week)
         elec = h_7d * PRINTER_POWER_KW * ELEC_PRICE_KWH
         direct = ((m_7d * G_PER_M_DEFAULT) / 1000.0) * FILAMENT_PRICE_KG + elec
         full = direct + (h_7d * DEPRECIATION_PER_HOUR)
@@ -1382,26 +1560,31 @@ def format_status():
     return "\n".join(lines)
 
 def do_reset(target):
-    st = load_state()
-    if target == "nozzle":
-        val = get_history_totals().get("total_filament_used", 0) / 1000.0
-        st["nozzle_start_meters"], st["nozzle_warned"] = val, False
-        msg = "✅ Счетчик сопла сброшен (%.1f м)" % val
-    elif target == "filter":
-        val = get_history_totals().get("total_time", 0) / 3600.0
-        st["filter_start_hours"], st["filter_warned"] = val, False
-        msg = "✅ Счетчик фильтра сброшен (%.1f ч)" % val
-    elif target == "ptfe":
-        val = get_history_totals().get("total_filament_used", 0) / 1000.0
-        st["ptfe_start_meters"], st["ptfe_warned"] = val, False
-        msg = "✅ Счетчик PTFE сброшен (%.1f м)" % val
-    elif target == "cutter":
-        st["cutter_cuts"], st["cutter_warned"] = 0, False
-        msg = "✅ Счетчик ножа сброшен (0 резов)"
-    else:
+    """Сброс счётчика ТО. Сеть читаем до лока, запись — в mutate_state().
+    Resets a maintenance counter; network reads happen before the lock."""
+    if target not in ("nozzle", "filter", "ptfe", "cutter"):
         return ""
-    save_state(st)
-    return msg
+    totals = get_history_totals()
+    meters = totals.get("total_filament_used", 0) / 1000.0
+    hours = totals.get("total_time", 0) / 3600.0
+    result = {"msg": ""}
+
+    def _apply(st):
+        if target == "nozzle":
+            st["nozzle_start_meters"], st["nozzle_warned"] = meters, False
+            result["msg"] = "✅ Счетчик сопла сброшен (%.1f м)" % meters
+        elif target == "filter":
+            st["filter_start_hours"], st["filter_warned"] = hours, False
+            result["msg"] = "✅ Счетчик фильтра сброшен (%.1f ч)" % hours
+        elif target == "ptfe":
+            st["ptfe_start_meters"], st["ptfe_warned"] = meters, False
+            result["msg"] = "✅ Счетчик PTFE сброшен (%.1f м)" % meters
+        else:
+            st["cutter_cuts"], st["cutter_warned"] = 0, False
+            result["msg"] = "✅ Счетчик ножа сброшен (0 резов)"
+
+    mutate_state(_apply)
+    return result["msg"]
 
 def _lube_worker(axis):
     try:
@@ -1469,20 +1652,12 @@ def _handle_update(item):
                 tg_answer_cb(cb_id)
                 out(msg.get("text") or "Выберите катушку:", build_spool_picker(pref, b_cb, int(pg_s)))
         elif data == "lang_en":
-            st = load_state()
-            s = st.get("settings") or {}
-            s["language"] = "en"
-            st["settings"] = s
-            save_state(st)
+            _set_language("en")
             tg_answer_cb(cb_id, "Language switched to English")
             out(t("panel_title"), MAIN_KB)
             return
         elif data == "lang_ru":
-            st = load_state()
-            s = st.get("settings") or {}
-            s["language"] = "ru"
-            st["settings"] = s
-            save_state(st)
+            _set_language("ru")
             tg_answer_cb(cb_id, "Язык изменён на русский")
             out(t("panel_title"), MAIN_KB)
             return        
@@ -1491,14 +1666,14 @@ def _handle_update(item):
         elif data == "btn_stats":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out(format_stats(), MAIN_KB)
         elif data == "btn_spools":
-            awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); t, kb = build_spools_view(); out(t, kb)
+            awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); view, kb = build_spools_view(); out(view, kb)
         elif data == "sp_add":
             awaiting_spool = True; edit_spool_id = None; tg_answer_cb(cb_id)
             out("✍️ <b>Новая катушка:</b>\nОтправьте тип, цвет и вес (г).\nПример: <b>PLA Черный матовый 850</b>", {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
         elif data == "sp_edit_menu":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
-            if not spools: t, kb = build_spools_view(); out(t, kb)
+            if not spools: view, kb = build_spools_view(); out(view, kb)
             else: out("✏️ <b>Редактирование катушки:</b>\nВыберите катушку из списка:", build_spool_picker("sp_edit_", "btn_spools", 0))
         elif data.startswith("sp_edit_"):
             sid = int(data.split("_").pop()); edit_spool_id = sid; awaiting_spool = False; tg_answer_cb(cb_id)
@@ -1513,7 +1688,7 @@ def _handle_update(item):
         elif data.startswith("sp_ovslot_"):
             let = data.split("_").pop(); tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
-            if not spools: t, kb = build_spools_view(); out(t, kb)
+            if not spools: view, kb = build_spools_view(); out(view, kb)
             else:
                 slots, _, _, _ = get_cfs_slots()
                 p_mat = slots.get(let, {}).get("mat") if let in slots else None
@@ -1522,37 +1697,49 @@ def _handle_update(item):
         elif data.startswith("sp_ovset_"):
             nums = [p for p in data.split("_") if p.isdigit()]
             let = data.split("_")[2]
+            if not nums:
+                tg_answer_cb(cb_id, "❌ Ошибка")
+                return
             sid = int(nums.pop())
-            st = load_state()
-            if let == "SINGLE":
-                st["single_spool_id"] = sid
-                save_state(st)
-                tg_answer_cb(cb_id, "✅ Катушка выбрана")
-            else:
-                slots, _, _, _ = get_cfs_slots()
-                if let in slots:
-                    ov = st.get("slot_overrides") or {}
-                    ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
-                    st["slot_overrides"] = ov; save_state(st)
-                    tg_answer_cb(cb_id, "✅ Слот %s уточнен" % let)
-                t, kb = build_spools_view(); out(t, kb)
+            slots = get_cfs_slots()[0] if let != "SINGLE" else {}
+
+            def _apply(st):
+                if let == "SINGLE":
+                    st["single_spool_id"] = sid
+                    return True
+                if let not in slots:
+                    return False
+                overrides = st.get("slot_overrides") or {}
+                overrides[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
+                st["slot_overrides"] = overrides
+                return True
+
+            if mutate_state(_apply):
+                tg_answer_cb(cb_id, "✅ Катушка выбрана" if let == "SINGLE" else "✅ Слот %s уточнен" % let)
+            view, kb = build_spools_view(); out(view, kb)
         elif data == "sp_del_menu":
             awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id)
             spools = [s for s in (load_state().get("spools") or []) if s.get("rem_g", 0) > 0]
-            if not spools: t, kb = build_spools_view(); out(t, kb)
+            if not spools: view, kb = build_spools_view(); out(view, kb)
             else: out("🗑 <b>Удаление катушки:</b>\nВыберите катушку из списка:", build_spool_picker("sp_askdel_", "btn_spools", 0))
         elif data.startswith("sp_askdel_"):
             sid = int(data.split("_").pop()); tg_answer_cb(cb_id)
             sp = next((s for s in (load_state().get("spools") or []) if s.get("id") == sid), None)
             if sp: out("⚠️ <b>Вы уверены, что хотите удалить катушку?</b>\n• <b>%s</b> (%.0f г)" % (esc(sp_title(sp)), sp["rem_g"]), {"inline_keyboard": [[{"text": "✅ Да, удалить", "callback_data": "sp_confdel_%d" % sid}, {"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
         elif data.startswith("sp_confdel_"):
-            sid = int(data.split("_").pop()); st = load_state()
-            st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
-            ov = st.get("slot_overrides") or {}
-            for k in [k for k, v in ov.items() if v.get("id") == sid]:
-                del ov[k]
-            st["slot_overrides"] = ov
-            save_state(st); tg_answer_cb(cb_id, "🗑 Удалено"); t, kb = build_spools_view(); out(t, kb)
+            sid = int(data.split("_").pop())
+
+            def _apply(st):
+                st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
+                overrides = st.get("slot_overrides") or {}
+                for key in [k for k, v in overrides.items() if (v or {}).get("id") == sid]:
+                    del overrides[key]
+                st["slot_overrides"] = overrides
+                if st.get("single_spool_id") == sid:
+                    st["single_spool_id"] = None
+
+            mutate_state(_apply)
+            tg_answer_cb(cb_id, "🗑 Удалено"); view, kb = build_spools_view(); out(view, kb)
         elif data == "btn_cons": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out(format_consumables(), MAIN_KB)
         elif data == "btn_maint": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out("🛠 <b>Обслуживание и смазка:</b>", MAINT_KB)
         elif data == "btn_resets": awaiting_spool = False; edit_spool_id = None; tg_answer_cb(cb_id); out("🔄 <b>Сброс счетчиков:</b>\n" + format_consumables(), RESET_KB)
@@ -1564,47 +1751,78 @@ def _handle_update(item):
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
     raw_txt = (msg.get("text") or "").strip(); txt = raw_txt.lower()
     if edit_spool_id is not None and not txt.startswith("/"):
-        st = load_state()
-        sp = next((s for s in (st.get("spools") or []) if s.get("id") == edit_spool_id), None)
-        if sp:
-            parts = raw_txt.split()
+        parts = raw_txt.split()
+        new_g = None
+        try:
+            new_g = round(max(0.0, float(raw_txt.replace(",", "."))), 1)
+        except Exception:
             try:
-                new_g = round(max(0.0, float(raw_txt.replace(",", "."))), 1)
-                sp["rem_g"] = new_g
+                new_g = round(max(0.0, float(parts[-1].replace(",", "."))), 1)
+                parts.pop(-1)
             except Exception:
-                try:
-                    sp["rem_g"] = round(max(0.0, float(parts[-1].replace(",", "."))), 1)
-                    parts.pop(-1)
-                except Exception:
-                    pass
-            if parts and parts[:1] and parts[:1].pop().upper() in ("PLA", "PETG", "TPU", "ABS", "ASA", "PA-CF", "PC", "NYLON", "HIPS"):
-                sp["mat"] = parts.pop(0).upper()
-                new_name = " ".join(parts).strip()
-                if new_name:
-                    sp["name"] = new_name[:1].upper() + new_name[1:]
-                    sp["group"] = normalize_color_group(sp["name"])
-            save_state(st); edit_spool_id = None; t, kb = build_spools_view()
-            tg_send("✅ Катушка <b>%s</b> (%.0f г) обновлена!\n" % (esc(sp_title(sp)), sp["rem_g"]) + t, kb)
+                new_g = None
+        new_mat = None
+        if parts and parts[0].upper() in ("PLA", "PETG", "TPU", "ABS", "ASA", "PA-CF", "PC", "NYLON", "HIPS"):
+            new_mat = parts.pop(0).upper()
+        new_name = " ".join(parts).strip()
+        updated = {}
+        target_id = edit_spool_id
+
+        def _apply(st):
+            sp = next((s for s in (st.get("spools") or []) if s.get("id") == target_id), None)
+            if not sp:
+                return False
+            if new_g is not None:
+                sp["rem_g"] = new_g
+            if new_mat:
+                sp["mat"] = new_mat
+            if new_name:
+                sp["name"] = new_name[:1].upper() + new_name[1:]
+                sp["group"] = normalize_color_group(sp["name"])
+            updated.update(sp)
+            return True
+
+        if mutate_state(_apply):
+            edit_spool_id = None
+            view, kb = build_spools_view()
+            tg_send("✅ Катушка <b>%s</b> (%.0f г) обновлена!\n" % (esc(sp_title(updated)), updated.get("rem_g", 0)) + view, kb)
             return
     if awaiting_spool and not txt.startswith("/"):
         parts = raw_txt.split()
         if len(parts) >= 3:
             try:
-                mat = parts.pop(0).upper(); grams = float(parts.pop(-1).replace(",", "."))
-                if grams <= 0 or grams > 10000: raise ValueError("bad grams")
+                mat = parts.pop(0).upper()
+                grams = float(parts.pop(-1).replace(",", "."))
+                if grams <= 0 or grams > 10000:
+                    raise ValueError("bad grams")
                 raw_name = " ".join(parts).strip()
-                cname = raw_name[:1].upper() + raw_name[1:] if raw_name else "Неизвестный"
-                grp = normalize_color_group(cname); st = load_state(); spools = st.get("spools") or []
-                nid = max([s.get("id", 0) for s in spools], default=0) + 1
-                new_sp = {"id": nid, "mat": mat, "name": cname, "group": grp, "hex": "", "rem_g": grams}
-                spools.append(new_sp); st["spools"] = spools; save_state(st); awaiting_spool = False; t, kb = build_spools_view()
-                tg_send("✅ Катушка <b>%s</b> (%.0f г) добавлена!\n" % (esc(sp_title(new_sp)), grams) + t, kb); return
-            except Exception: pass
+                cname = raw_name[:1].upper() + raw_name[1:] if raw_name else t("unknown")
+                grp = normalize_color_group(cname)
+                created = {}
+
+                def _apply(st):
+                    spools = st.get("spools") or []
+                    new_id = max([s.get("id", 0) for s in spools], default=0) + 1
+                    new_sp = {"id": new_id, "mat": mat, "name": cname, "group": grp,
+                              "hex": "", "rem_g": grams}
+                    spools.append(new_sp)
+                    st["spools"] = spools
+                    created.update(new_sp)
+
+                mutate_state(_apply)
+                awaiting_spool = False
+                view, kb = build_spools_view()
+                tg_send("✅ Катушка <b>%s</b> (%.0f г) добавлена!\n" % (esc(sp_title(created)), grams) + view, kb)
+                return
+            except Exception:
+                pass
+        tg_send("⚠️ Формат: <b>PLA Черный матовый 850</b>", {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]})
+        return
         tg_send("⚠️ Формат: <b>PLA Черный матовый 850</b>", {"inline_keyboard": [[{"text": "❌ Отмена", "callback_data": "btn_spools"}]]}); return
     if txt.startswith("/stats"): tg_send(format_stats(), MAIN_KB)
     elif txt.startswith("/consumables"): tg_send(format_consumables(), MAIN_KB)
     elif txt.startswith("/status"): send_usb_photo(format_status(), MAIN_KB)
-    elif txt.startswith("/spools"): t, kb = build_spools_view(); tg_send(t, kb)
+    elif txt.startswith("/spools"): view, kb = build_spools_view(); tg_send(view, kb)
     elif txt.startswith(("/start", "/help")): awaiting_spool = False; edit_spool_id = None; tg_send("🤖 <b>Панель управления принтером:</b>", MAIN_KB)
 
 # ==================== 11. WEB-СЕРВЕР MINI APP ====================
@@ -1635,21 +1853,50 @@ def _get_cached_stats():
     _hist_cache.update({"ts": time.time(), "totals": totals, "h7": h_7d, "h30": h_30d, "ok": ok_all, "hlen": len(history), "d_lbl": days_labels, "d_hrs": days_hours})
     return _hist_cache
 
+INITDATA_MAX_AGE = 86400  # сек / seconds: срок жизни initData
+
+
+def _allowed_user_ids():
+    """Разрешённые Telegram user id: владелец чата + список из secrets.ini.
+    Allowed Telegram user ids: the chat owner plus the secrets.ini list."""
+    ids = {str(CHAT_ID).strip()}
+    for part in str(ALLOWED_USERS or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part:
+            ids.add(part)
+    return ids
+
+
 def verify_tg_init_data(init_data):
-    if not init_data: return False
+    """Проверяет подпись initData, срок жизни и владельца.
+    Validates the initData HMAC, its age and the user id."""
+    if not init_data:
+        return False
     try:
         parsed = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
         recv_hash = parsed.pop("hash", "")
-        if not recv_hash: return False
+        if not recv_hash:
+            return False
         data_check = "\n".join("%s=%s" % (k, v) for k, v in sorted(parsed.items()))
         secret = hmac.new(b"WebAppData", TOKEN.encode(), hashlib.sha256).digest()
         calc_hash = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calc_hash, recv_hash): return False
-        if "user" in parsed and parsed["user"]:
-            user_obj = json.loads(parsed["user"])
-            return str(user_obj.get("id", "")) == str(CHAT_ID)
-        return True
-    except Exception:
+        if not hmac.compare_digest(calc_hash, recv_hash):
+            log.warning("initData: подпись не совпала / bad signature")
+            return False
+        try:
+            auth_date = int(parsed.get("auth_date") or 0)
+        except (TypeError, ValueError):
+            return False
+        age = time.time() - auth_date
+        if auth_date <= 0 or age > INITDATA_MAX_AGE:
+            log.warning("initData: устарел на %d с / expired", int(age))
+            return False
+        if not parsed.get("user"):
+            return False
+        user_obj = json.loads(parsed["user"])
+        return str(user_obj.get("id", "")) in _allowed_user_ids()
+    except Exception as e:
+        log.warning("initData: ошибка проверки / validation error: %s", e)
         return False
 
 def build_webapp_payload():
@@ -1747,70 +1994,253 @@ def build_webapp_payload():
         }
     }
 
-def check_for_updates():
+def _update_bases():
+    return list(UPDATE_BASES)
+
+
+def _http_get(url, timeout=20):
+    """GET с таймаутом и явным User-Agent.
+    Plain GET with a timeout and an explicit User-Agent."""
+    req = urllib.request.Request(url, headers={"User-Agent": "klipper-tg-bot/%s" % VERSION})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _fetch_first(path, timeout=20):
+    """Скачивает path с первого ответившего зеркала.
+    Downloads path from the first mirror that responds."""
+    errors = []
+    for base in _update_bases():
+        url = "%s/%s" % (base, path.lstrip("/"))
+        try:
+            data = _http_get(url, timeout)
+            if data:
+                return data, url
+        except Exception as e:
+            errors.append("%s: %s" % (url, e))
+            log.warning("Зеркало недоступно / mirror failed: %s", errors[-1])
+    return None, "; ".join(errors) or "no update sources"
+
+
+def _parse_version(v):
     try:
-        url = "%s/printer_tg_bot.py?v=%s" % (GITHUB_RAW_BASE, VERSION)
-        with urllib.request.urlopen(url, timeout=15) as r:
-            new_code = r.read().decode("utf-8")
-        m = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', new_code, re.MULTILINE)
-        if not m:
-            return None
-        new_version = m.group(1)
-        def parse_version(v):
+        return [int(x) for x in str(v).lstrip("vV").strip().split(".")]
+    except Exception:
+        return [0]
+
+
+def _sha256_hex(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _safe_relpath(name):
+    """Разрешает только простые имена файлов внутри BASE_DIR.
+    Allows only plain file names inside BASE_DIR (no traversal)."""
+    name = str(name or "").strip()
+    if (not name or name.startswith((".", "/", "\\"))
+            or "/" in name or "\\" in name or ".." in name):
+        return None
+    return name
+
+
+def _load_manifest(raw):
+    """Разбирает и валидирует manifest.json.
+    Parses and validates manifest.json."""
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("manifest must be an object")
+    version = str(data.get("version") or "").strip()
+    files = data.get("files") or {}
+    if not version or not isinstance(files, dict) or not files:
+        raise ValueError("manifest must contain version and files")
+    clean = {}
+    for name, meta in files.items():
+        safe = _safe_relpath(name)
+        if not safe:
+            raise ValueError("unsafe file name in manifest: %r" % name)
+        meta = meta or {}
+        digest = str(meta.get("sha256") or "").strip().lower()
+        if not re.match(r"^[0-9a-f]{64}$", digest):
+            raise ValueError("bad sha256 for %s" % name)
+        clean[safe] = {"sha256": digest, "size": int(meta.get("size") or 0)}
+    return {
+        "version": version,
+        "min_version": str(data.get("min_version") or "0"),
+        "files": clean,
+    }
+
+
+def check_for_updates():
+    """Проверка обновлений: маленький version.txt, затем манифест.
+    Update check: fetch the tiny version.txt first, then the manifest."""
+    try:
+        best_version, best_base = None, None
+        for base in _update_bases():
+            url = "%s/version.txt?v=%d" % (base, int(time.time()))
             try:
-                return [int(x) for x in v.lstrip("v").split(".")]
-            except Exception:
-                return [0]
-        current = parse_version(VERSION)
-        new = parse_version(new_version)
-        if new > current:
-            log.info("Доступно обновление: %s -> %s", VERSION, new_version)
-            return {"version": new_version, "code": new_code, "url": url}
-        else:
-            log.info("GitHub версия %s не выше текущей %s — пропускаем", new_version, VERSION)
+                raw = _http_get(url, 10).decode("utf-8", "ignore").strip()
+            except Exception as e:
+                log.warning("version.txt недоступен / unavailable: %s (%s)", url, e)
+                continue
+            remote = raw.splitlines()[0].strip() if raw else ""
+            if not remote:
+                continue
+            if best_version is None or _parse_version(remote) > _parse_version(best_version):
+                best_version, best_base = remote, base
+        if not best_version:
             return None
+        if _parse_version(best_version) <= _parse_version(VERSION):
+            log.info("Обновлений нет: %s (локально %s) / up to date", best_version, VERSION)
+            return None
+        raw_manifest, manifest_src = _fetch_first("manifest.json?v=%s" % best_version, 15)
+        if not raw_manifest:
+            log.warning("manifest.json недоступен / manifest unavailable: %s", manifest_src)
+            return None
+        manifest = _load_manifest(raw_manifest)
+        if manifest["version"] != best_version:
+            log.warning("Версия манифеста %s не совпадает с version.txt %s",
+                        manifest["version"], best_version)
+            return None
+        if _parse_version(VERSION) < _parse_version(manifest["min_version"]):
+            log.warning("Обновление требует минимум v%s — нужна переустановка",
+                        manifest["min_version"])
+            return None
+        log.info("Доступно обновление: %s -> %s (источник %s)",
+                 VERSION, manifest["version"], best_base)
+        return {"version": manifest["version"], "manifest": manifest}
     except Exception as e:
-        log.warning("Ошибка проверки обновлений: %s", e)
+        log.warning("Ошибка проверки обновлений / update check failed: %s", e)
         return None
 
-def apply_update(update_info):
-    try:
-        # 1. Скачиваем и проверяем бэкенд
-        new_path = os.path.join(BASE_DIR, "printer_tg_bot_new.py")
-        with open(new_path, "w", encoding="utf-8") as f:
-            f.write(update_info["code"])
-        py_compile.compile(new_path, doraise=True)
-        log.info("✅ Backend updated and compiled successfully")
-        
-        # 2. Скачиваем фронтенд
-        html_updated = False
+
+def _download_verified(name, meta, dest):
+    """Скачивает файл и сверяет sha256, перебирая все зеркала.
+    Downloads a file and verifies sha256, trying every mirror."""
+    last_err = None
+    for base in _update_bases():
+        url = "%s/%s?v=%s" % (base, name, meta.get("sha256", "")[:12])
         try:
-            html_url = "%s/webapp.html?v=%s" % (GITHUB_RAW_BASE, update_info["version"])
-            log.info("📥 Downloading webapp.html from %s", html_url)
-            with urllib.request.urlopen(html_url, timeout=30) as r:
-                html_code = r.read().decode("utf-8")
-            html_path = os.path.join(BASE_DIR, "webapp_new.html")
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_code)
-            html_updated = True
-            log.info("✅ Frontend downloaded successfully")
+            data = _http_get(url, 60)
         except Exception as e:
-            log.warning("⚠️ Не удалось скачать webapp.html: %s", e)
-        
-        # 3. Применяем обновления
-        os.replace(new_path, os.path.join(BASE_DIR, "printer_tg_bot.py"))
-        if html_updated and os.path.exists(html_path):
-            os.replace(html_path, WEBAPP_FILE)
-            log.info("✅ Both backend and frontend updated")
-        else:
-            log.warning("⚠️ Only backend updated, frontend update failed")
-        
-        log.info("🔄 Обновление применено: %s -> %s. Перезапуск...", VERSION, update_info["version"])
-        tg_send("✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается..." % (VERSION, update_info["version"]), MAIN_KB)
+            last_err = "%s: %s" % (url, e)
+            continue
+        if meta.get("size") and len(data) != meta["size"]:
+            last_err = "%s: size %d != %d" % (url, len(data), meta["size"])
+            continue
+        if _sha256_hex(data) != meta["sha256"]:
+            last_err = "%s: sha256 mismatch" % url
+            log.error("Хеш не совпал / hash mismatch: %s", last_err)
+            continue
+        with open(dest, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        return True
+    log.error("Не удалось скачать %s / download failed: %s", name, last_err)
+    return False
+
+
+_update_lock = threading.Lock()
+_update_running = [False]
+
+
+def apply_update(update_info):
+    """Поэтапное обновление: скачать -> проверить -> забэкапить -> заменить.
+    При любой ошибке — откат к предыдущей версии.
+    Staged update with hash verification and rollback on failure."""
+    with _update_lock:
+        if _update_running[0]:
+            log.warning("Обновление уже выполняется / update already running")
+            return
+        _update_running[0] = True
+    manifest = update_info.get("manifest") or {}
+    files = manifest.get("files") or {}
+    new_version = str(manifest.get("version") or update_info.get("version") or "")
+    replaced = []
+    try:
+        if not files:
+            raise RuntimeError("empty manifest")
+        shutil.rmtree(UPDATE_STAGING, ignore_errors=True)
+        shutil.rmtree(UPDATE_BACKUP, ignore_errors=True)
+        os.makedirs(UPDATE_STAGING)
+        os.makedirs(UPDATE_BACKUP)
+
+        # 1. Скачиваем во временную папку и проверяем целостность
+        #    Download into staging and verify integrity.
+        for name, meta in files.items():
+            dest = os.path.join(UPDATE_STAGING, name)
+            if not _download_verified(name, meta, dest):
+                raise RuntimeError("не удалось скачать %s" % name)
+            if name.endswith(".py"):
+                with open(dest, "r", encoding="utf-8") as f:
+                    compile(f.read(), dest, "exec")
+            elif name.endswith(".html"):
+                with open(dest, "r", encoding="utf-8") as f:
+                    if "</html>" not in f.read():
+                        raise RuntimeError("webapp.html повреждён")
+
+        # 2. Бэкап текущих файлов / back up current files.
+        for name in files:
+            current = os.path.join(BASE_DIR, name)
+            if os.path.exists(current):
+                shutil.copyfile(current, os.path.join(UPDATE_BACKUP, name))
+
+        # 3. Атомарная замена / atomic replace.
+        for name in files:
+            os.replace(os.path.join(UPDATE_STAGING, name), os.path.join(BASE_DIR, name))
+            replaced.append(name)
+        with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+        log.info("Обновление применено: %s -> %s (%s)",
+                 VERSION, new_version, ", ".join(replaced))
+        tg_send("✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается..."
+                % (VERSION, new_version), MAIN_KB)
+        shutil.rmtree(UPDATE_STAGING, ignore_errors=True)
+        shutil.rmtree(UPDATE_BACKUP, ignore_errors=True)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
-        log.exception("Ошибка применения обновления")
-        tg_send("⚠️ <b>Ошибка обновления:</b> %s" % str(e), MAIN_KB)
+        log.exception("Ошибка обновления / update failed: %s", e)
+        restored = []
+        for name in replaced:
+            backup = os.path.join(UPDATE_BACKUP, name)
+            if os.path.exists(backup):
+                try:
+                    os.replace(backup, os.path.join(BASE_DIR, name))
+                    restored.append(name)
+                except OSError:
+                    pass
+        shutil.rmtree(UPDATE_STAGING, ignore_errors=True)
+        tg_send("⚠️ <b>Ошибка обновления:</b> %s\nОткат / rollback: %s"
+                % (esc(str(e)), ", ".join(restored) or "—"), MAIN_KB)
+    finally:
+        with _update_lock:
+            _update_running[0] = False
+
+
+def _as_int(value, default=None):
+    """Безопасное приведение к int, None при ошибке.
+    Safe int conversion; returns the default on failure."""
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value, default=None):
+    """Безопасное приведение к float (запятая как разделитель тоже).
+    Safe float conversion; accepts a comma as the decimal separator."""
+    try:
+        return float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
 
 class WebAppHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -1826,10 +2256,12 @@ class WebAppHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _check_auth(self, params):
-        ref = (self.headers.get("Referer") or "") + (self.headers.get("Origin") or "")
-        if WEBAPP_SECRET and params.get("key") == WEBAPP_SECRET:
-            return True
-        if "trycloudflare.com" in ref:
+        """Только секрет панели или подписанный initData.
+        Referer/Origin не считаются доверенными.
+        Only the panel secret or signed initData is accepted;
+        Referer/Origin headers are untrusted and ignored."""
+        key = str(params.get("key") or "")
+        if WEBAPP_SECRET and key and hmac.compare_digest(key, str(WEBAPP_SECRET)):
             return True
         return verify_tg_init_data(params.get("initData", ""))
 
@@ -1838,161 +2270,278 @@ class WebAppHandler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 self._send_json(200, build_webapp_payload())
             elif path == "/api/spool/delta":
-                sid = int(params.get("id", 0))
-                delta = float(params.get("delta", 0))
-                st = load_state()
-                for s in (st.get("spools") or []):
-                    if s.get("id") == sid:
-                        s["rem_g"] = round(max(0.0, s.get("rem_g", 0) + delta), 1)
-                        break
-                save_state(st)
-                self._send_json(200, {"ok": True})
+                self._handle_spool_delta(params)
             elif path == "/api/settings/save":
-                st = load_state()
-                s = st.get("settings") or {}
-                if "spool_tracking" in params:
-                    s["spool_tracking"] = str(params["spool_tracking"]).lower() in ("1", "true", "yes")
-                for k, cast in (
-                    ("timezone_offset", int), ("digest_hour", int), ("maint_hours", float),
-                    ("nozzle_meters", float), ("filter_hours", float), ("ptfe_meters", float),
-                    ("cutter_cuts", int), ("cfs_humidity", int), ("elec_price", float),
-                    ("power_kw", float), ("depr_hour", float)
-                ):
-                    if k in params and str(params[k]) != "":
-                        s[k] = cast(params[k])
-                if "prices_json" in params and params["prices_json"]:
-                    try:
-                        s["prices"] = json.loads(params["prices_json"])
-                    except Exception:
-                        pass
-                st["settings"] = s
-                save_state(st)
-                self._send_json(200, {"ok": True})
+                self._handle_settings_save(params)
             elif path == "/api/spool/save":
-                st = load_state()
-                spools = st.get("spools") or []
-                sid = params.get("id")
-                mat = str(params.get("mat") or "PLA").strip().upper()
-                nm = str(params.get("name") or "").strip()
-                if nm: nm = nm[:1].upper() + nm[1:]
-                grams = round(max(0.0, float(params.get("rem_g", 1000))), 1)
-                if sid:
-                    for s in spools:
-                        if s.get("id") == int(sid):
-                            s["mat"] = mat
-                            if nm:
-                                s["name"] = nm
-                                s["group"] = normalize_color_group(nm)
-                            s["rem_g"] = grams
-                else:
-                    nid = max([s.get("id", 0) for s in spools], default=0) + 1
-                    spools.append({"id": nid, "mat": mat, "name": nm or "Новый", "group": normalize_color_group(nm), "hex": "", "rem_g": grams})
-                st["spools"] = spools
-                save_state(st)
-                self._send_json(200, {"ok": True})
+                self._handle_spool_save(params)
             elif path == "/api/spool/delete":
-                sid = int(params.get("id", 0))
-                st = load_state()
-                st["spools"] = [s for s in (st.get("spools") or []) if s.get("id") != sid]
-                ov = st.get("slot_overrides") or {}
-                for k in [k for k, v in ov.items() if v.get("id") == sid]: del ov[k]
-                st["slot_overrides"] = ov
-                save_state(st)
-                self._send_json(200, {"ok": True})
+                self._handle_spool_delete(params)
             elif path == "/api/slot/assign":
-                let = str(params.get("slot") or "")
-                sid = int(params.get("spool_id", 0))
-                st = load_state()
-                if let == "SINGLE":
-                    st["single_spool_id"] = sid
-                else:
-                    slots, _, _, _ = get_cfs_slots()
-                    if let in slots:
-                        ov = st.get("slot_overrides") or {}
-                        ov[let] = {"id": sid, "hex": slots[let]["hex"], "mat": slots[let]["mat"]}
-                        st["slot_overrides"] = ov
-                save_state(st)
-                self._send_json(200, {"ok": True})
+                self._handle_slot_assign(params)
             elif path == "/api/reset":
                 do_reset(str(params.get("target") or ""))
                 self._send_json(200, {"ok": True})
             elif path == "/api/move":
-                ax = str(params.get("axis") or "")
-                if ax in ("x", "y", "z"):
-                    threading.Thread(target=_lube_worker, args=(ax,), daemon=True).start()
-                self._send_json(200, {"ok": True})
+                axis = str(params.get("axis") or "").lower()
+                if axis in ("x", "y", "z"):
+                    threading.Thread(target=_lube_worker, args=(axis,), daemon=True).start()
+                    self._send_json(200, {"ok": True})
+                else:
+                    self._send_json(400, {"error": "bad axis"})
             elif path == "/api/printer/cmd":
-                cmd = str(params.get("cmd") or "")
-                ep = {"pause": "/printer/print/pause", "resume": "/printer/print/resume", "cancel": "/printer/print/cancel"}.get(cmd)
-                if ep:
-                    try:
-                        urllib.request.urlopen(MOONRAKER + ep, data=b"", timeout=5).close()
-                    except Exception:
-                        pass
-                self._send_json(200, {"ok": True})
+                self._handle_printer_cmd(params)
             elif path == "/api/light/toggle":
-                st = load_state()
-                cur_on = bool(st.get("light_on", False))
-                new_on = not cur_on
-                st["light_on"] = new_on
-                save_state(st)
-                val = 1 if new_on else 0
-                objs = moonraker_get("/printer/objects/list", 4).get("objects") or []
-                cmds = []
-                for o in objs:
-                    ol = o.lower()
-                    if (o.startswith("output_pin ") or o.startswith("led ")) and any(k in ol for k in ("light", "led", "lamp", "caselight")):
-                        pin_name = o.split(" ", 1).pop()
-                        if o.startswith("output_pin "):
-                            cmds.append("SET_PIN PIN=%s VALUE=%d" % (pin_name, val))
-                        else:
-                            cmds.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d" % (pin_name, val, val, val, val))
-                if cmds:
-                    try:
-                        urllib.request.urlopen(MOONRAKER + "/printer/gcode/script", data=urllib.parse.urlencode({"script": "\n".join(cmds)}).encode(), timeout=5).close()
-                    except Exception:
-                        pass
-                self._send_json(200, {"ok": True, "light_on": new_on})
+                self._handle_light_toggle()
             elif path == "/api/settings/language":
-                lang = str(params.get("language", "ru")).lower()
-                if lang not in ("ru", "en"):
-                    lang = "ru"
-                st = load_state()
-                s = st.get("settings") or {}
-                s["language"] = lang
-                st["settings"] = s
-                save_state(st)
-                    # Пересчитываем глобальные кнопки на новом языке
-                global MAIN_KB, MAINT_KB, RESET_KB
-                MAIN_KB = get_main_kb()
-                MAINT_KB = get_maint_kb()
-                RESET_KB = get_reset_kb()
-                # Отправляем сообщение в Telegram
-                lang_msg = "🌐 Language switched to English" if lang == "en" else "🌐 Язык изменён на русский"
-                try:
-                    tg_send(lang_msg, MAIN_KB)
-                    log.info("🌐 Language switched to: %s, message sent", lang)
-                except Exception as e:
-                    log.warning("Failed to send language switch message: %s", e)
-                self._send_json(200, {"ok": True, "language": lang})
+                self._handle_language(params)
             elif path == "/api/update/check":
                 update = check_for_updates()
                 if update:
-                    self._send_json(200, {"ok": True, "has_update": True, "new_version": update["version"]})
+                    self._send_json(200, {"ok": True, "has_update": True,
+                                          "new_version": update["version"]})
                 else:
-                    self._send_json(200, {"ok": True, "has_update": False, "current_version": VERSION})
+                    self._send_json(200, {"ok": True, "has_update": False,
+                                          "current_version": VERSION})
             elif path == "/api/update/apply":
                 update = check_for_updates()
                 if update:
                     threading.Thread(target=apply_update, args=(update,), daemon=True).start()
-                    self._send_json(200, {"ok": True, "message": "Updating to v%s..." % update["version"]})
+                    self._send_json(200, {"ok": True,
+                                          "message": "Updating to v%s..." % update["version"]})
                 else:
                     self._send_json(200, {"ok": True, "message": "Already up to date"})
             else:
                 self._send_json(404, {"error": "unknown endpoint"})
         except Exception as e:
             log.exception("API Error on %s: %s", path, e)
-            self._send_json(500, {"error": str(e)})
+            # Внутренние детали не отдаём клиенту / do not leak internals to the client
+            self._send_json(500, {"error": "internal error"})
+
+    def _handle_spool_delta(self, params):
+        sid = _as_int(params.get("id"))
+        delta = _as_float(params.get("delta"))
+        if sid is None or delta is None:
+            self._send_json(400, {"error": "bad id or delta"})
+            return
+
+        def _apply(st):
+            for sp in (st.get("spools") or []):
+                if sp.get("id") == sid:
+                    sp["rem_g"] = round(max(0.0, float(sp.get("rem_g") or 0) + delta), 1)
+                    return True
+            return False
+
+        if not mutate_state(_apply):
+            self._send_json(404, {"error": "spool not found"})
+        else:
+            self._send_json(200, {"ok": True})
+
+    def _handle_settings_save(self, params):
+        int_keys = ("timezone_offset", "digest_hour", "cutter_cuts", "cfs_humidity")
+        float_keys = ("maint_hours", "nozzle_meters", "filter_hours", "ptfe_meters",
+                      "elec_price", "power_kw", "depr_hour")
+        bad = []
+
+        def _apply(st):
+            settings = st.get("settings") or {}
+            if "spool_tracking" in params:
+                settings["spool_tracking"] = _as_bool(params["spool_tracking"])
+            for key in int_keys:
+                if key in params and str(params[key]).strip() != "":
+                    val = _as_int(params[key])
+                    if val is None:
+                        bad.append(key)
+                    else:
+                        settings[key] = val
+            for key in float_keys:
+                if key in params and str(params[key]).strip() != "":
+                    val = _as_float(params[key])
+                    if val is None or val < 0:
+                        bad.append(key)
+                    else:
+                        settings[key] = val
+            if params.get("prices_json"):
+                try:
+                    raw = json.loads(params["prices_json"])
+                except Exception:
+                    raw = None
+                if not isinstance(raw, dict):
+                    bad.append("prices_json")
+                else:
+                    prices = {}
+                    for mat, price in raw.items():
+                        val = _as_float(price)
+                        if val is None or val < 0:
+                            bad.append("prices.%s" % mat)
+                            continue
+                        prices[str(mat).upper()] = val
+                    if prices:
+                        settings["prices"] = prices
+            st["settings"] = settings
+
+        mutate_state(_apply)
+        if bad:
+            self._send_json(400, {"ok": False, "error": "bad values", "fields": bad})
+        else:
+            self._send_json(200, {"ok": True})
+
+    def _handle_spool_save(self, params):
+        mat = str(params.get("mat") or "PLA").strip().upper()[:16] or "PLA"
+        name = str(params.get("name") or "").strip()[:40]
+        if name:
+            name = name[:1].upper() + name[1:]
+        grams = _as_float(params.get("rem_g"), 1000.0)
+        if grams is None or grams < 0:
+            self._send_json(400, {"error": "bad rem_g"})
+            return
+        sid = _as_int(params.get("id"))
+
+        def _apply(st):
+            spools = st.get("spools") or []
+            if sid:
+                for sp in spools:
+                    if sp.get("id") == sid:
+                        sp["mat"] = mat
+                        if name:
+                            sp["name"] = name
+                            sp["group"] = normalize_color_group(name)
+                        sp["rem_g"] = round(grams, 1)
+                        st["spools"] = spools
+                        return True
+                return False
+            new_id = max([int(sp.get("id") or 0) for sp in spools] or [0]) + 1
+            spools.append({
+                "id": new_id, "mat": mat, "name": name or t("new_spool"),
+                "group": normalize_color_group(name), "hex": "", "rem_g": round(grams, 1),
+            })
+            st["spools"] = spools
+            return True
+
+        if not mutate_state(_apply):
+            self._send_json(404, {"error": "spool not found"})
+        else:
+            self._send_json(200, {"ok": True})
+
+    def _handle_spool_delete(self, params):
+        sid = _as_int(params.get("id"))
+        if sid is None:
+            self._send_json(400, {"error": "bad id"})
+            return
+
+        def _apply(st):
+            before = len(st.get("spools") or [])
+            st["spools"] = [sp for sp in (st.get("spools") or []) if sp.get("id") != sid]
+            overrides = st.get("slot_overrides") or {}
+            for key in [k for k, v in overrides.items() if (v or {}).get("id") == sid]:
+                del overrides[key]
+            st["slot_overrides"] = overrides
+            if st.get("single_spool_id") == sid:
+                st["single_spool_id"] = None
+            return len(st["spools"]) != before
+
+        if not mutate_state(_apply):
+            self._send_json(404, {"error": "spool not found"})
+        else:
+            self._send_json(200, {"ok": True})
+
+    def _handle_slot_assign(self, params):
+        letter = str(params.get("slot") or "")
+        sid = _as_int(params.get("spool_id"))
+        if sid is None:
+            self._send_json(400, {"error": "bad spool_id"})
+            return
+
+        def _apply(st):
+            if letter == "SINGLE":
+                st["single_spool_id"] = sid
+                return True
+            slots, _, _, _ = get_cfs_slots()
+            if letter not in slots:
+                return False
+            overrides = st.get("slot_overrides") or {}
+            overrides[letter] = {"id": sid, "hex": slots[letter]["hex"], "mat": slots[letter]["mat"]}
+            st["slot_overrides"] = overrides
+            return True
+
+        if not mutate_state(_apply):
+            self._send_json(404, {"error": "unknown slot"})
+        else:
+            self._send_json(200, {"ok": True})
+
+    def _handle_printer_cmd(self, params):
+        cmd = str(params.get("cmd") or "")
+        endpoint = {"pause": "/printer/print/pause",
+                    "resume": "/printer/print/resume",
+                    "cancel": "/printer/print/cancel"}.get(cmd)
+        if not endpoint:
+            self._send_json(400, {"error": "bad cmd"})
+            return
+        ok = True
+        try:
+            urllib.request.urlopen(MOONRAKER + endpoint, data=b"", timeout=5).close()
+        except Exception as e:
+            log.warning("Printer cmd %s failed: %s", cmd, e)
+            ok = False
+        self._send_json(200 if ok else 502, {"ok": ok})
+
+    def _handle_light_toggle(self):
+        result = {}
+
+        def _apply(st):
+            result["on"] = not bool(st.get("light_on", False))
+            st["light_on"] = result["on"]
+
+        mutate_state(_apply)
+        new_on = bool(result.get("on"))
+        value = 1 if new_on else 0
+        try:
+            objects = moonraker_get("/printer/objects/list", 4).get("objects") or []
+            commands = []
+            for obj in objects:
+                low = obj.lower()
+                if (obj.startswith("output_pin ") or obj.startswith("led ")) and any(
+                        key in low for key in ("light", "led", "lamp", "caselight")):
+                    pin = obj.split(" ", 1).pop()
+                    if obj.startswith("output_pin "):
+                        commands.append("SET_PIN PIN=%s VALUE=%d" % (pin, value))
+                    else:
+                        commands.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d"
+                                        % (pin, value, value, value, value))
+            if commands:
+                urllib.request.urlopen(
+                    MOONRAKER + "/printer/gcode/script",
+                    data=urllib.parse.urlencode({"script": "\n".join(commands)}).encode(),
+                    timeout=5).close()
+        except Exception as e:
+            log.warning("Light toggle failed: %s", e)
+        self._send_json(200, {"ok": True, "light_on": new_on})
+
+    def _handle_language(self, params):
+        lang = str(params.get("language", "ru")).lower()
+        if lang not in ("ru", "en"):
+            lang = "ru"
+
+        def _apply(st):
+            settings = st.get("settings") or {}
+            settings["language"] = lang
+            st["settings"] = settings
+
+        mutate_state(_apply)
+        # Пересобираем все клавиатуры, включая приветствие.
+        # Rebuild every keyboard, the welcome one included.
+        global MAIN_KB, WELCOME_KB, MAINT_KB, RESET_KB
+        MAIN_KB = get_main_kb()
+        WELCOME_KB = get_welcome_kb()
+        MAINT_KB = get_maint_kb()
+        RESET_KB = get_reset_kb()
+        lang_msg = "🌐 Language switched to English" if lang == "en" else "🌐 Язык изменён на русский"
+        try:
+            tg_send(lang_msg, MAIN_KB)
+            log.info("🌐 Language switched to: %s", lang)
+        except Exception as e:
+            log.warning("Failed to send language switch message: %s", e)
+        self._send_json(200, {"ok": True, "language": lang})
 
     def do_GET(self):
         global CAM_SNAPSHOT_URL, last_cam_fail_ts
@@ -2005,12 +2554,17 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Content-Length", str(len(html)))
                 self.end_headers()
                 self.wfile.write(html)
             else:
                 self._send_json(404, {"error": "webapp.html not found"})
         elif path == "/api/cam.jpg":
+            # Камера — приватные данные: без авторизации не отдаём.
+            # Camera frames are private: never serve them unauthenticated.
+            if not self._check_auth(qs):
+                self._send_json(403, {"error": "unauthorized"}); return
             img = None
             if not CAM_SNAPSHOT_URL and time.time() - last_cam_fail_ts > 60: detect_environment()
             if CAM_SNAPSHOT_URL:
@@ -2037,18 +2591,59 @@ class WebAppHandler(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers()
 
     def do_POST(self):
-        path = self.path.split("?", 1).pop(0)
+        parts = self.path.split("?", 1)
+        path = parts.pop(0)
+        qs = dict(urllib.parse.parse_qsl(parts.pop(0))) if parts else {}
         try:
             ln = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(ln).decode("utf-8")) if ln > 0 else {}
         except Exception:
             self._send_json(400, {"error": "bad json"}); return
+        if not isinstance(body, dict):
+            self._send_json(400, {"error": "bad json"}); return
+        # Параметры из query (key/initData) добавляем в тело, чтобы POST
+        # проходил ту же проверку авторизации, что и GET.
+        # Merge query params into the body so POST uses the same auth path as GET.
+        for key, value in qs.items():
+            body.setdefault(key, value)
         if not self._check_auth(body):
             self._send_json(403, {"error": "unauthorized"}); return
         self._handle_api(path, body)
 
+_tunnel_proc = None
+TUNNEL_PID_FILE = os.path.join(BASE_DIR, "cloudflared.pid")
+
+
+def _stop_tunnel():
+    """Останавливает туннель без внешних утилит (без killall/pkill).
+    Stops the tunnel without external tools (no killall/pkill)."""
+    global _tunnel_proc
+    proc, _tunnel_proc = _tunnel_proc, None
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    try:
+        with open(TUNNEL_PID_FILE, "r") as f:
+            pid = int((f.read() or "0").strip())
+        if pid > 1 and pid != os.getpid():
+            os.kill(pid, 15)
+            log.info("Остановлен осиротевший cloudflared pid=%d / stopped orphan", pid)
+    except (OSError, ValueError):
+        pass
+    try:
+        os.remove(TUNNEL_PID_FILE)
+    except OSError:
+        pass
+
+
 def _tunnel_worker():
-    global PUBLIC_WEBAPP_URL
+    global PUBLIC_WEBAPP_URL, _tunnel_proc
     if not USE_CLOUDFLARED:
         log.info("Cloudflared отключен в config.ini")
         return
@@ -2058,6 +2653,12 @@ def _tunnel_worker():
     while True:
         try:
             proc = subprocess.Popen([CLOUDFLARED_BIN, "tunnel", "--url", "http://127.0.0.1:%d" % WEBAPP_PORT, "--protocol", "http2", "--no-autoupdate"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            _tunnel_proc = proc
+            try:
+                with open(TUNNEL_PID_FILE, "w") as f:
+                    f.write(str(proc.pid))
+            except OSError:
+                pass
             for raw_line in iter(proc.stdout.readline, b""):
                 line = raw_line.decode("utf-8", errors="ignore")
                 m = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
@@ -2072,13 +2673,14 @@ def _tunnel_worker():
                         })
                         log.info("setChatMenuButton: %s", res)
             proc.wait()
+            _tunnel_proc = None
         except Exception as e:
             log.warning("Tunnel err: %s", e)
             time.sleep(10)
 
 def start_webapp_services():
     try:
-        if USE_CLOUDFLARED: os.system("killall cloudflared 2>/dev/null")
+        if USE_CLOUDFLARED: _stop_tunnel()
         srv = ThreadingHTTPServer(("127.0.0.1", WEBAPP_PORT), WebAppHandler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         if USE_CLOUDFLARED: threading.Thread(target=_tunnel_worker, daemon=True).start()
@@ -2088,26 +2690,55 @@ def start_webapp_services():
 
 # ==================== 12. ОСНОВНОЙ ЦИКЛ МОНИТОРИНГА ====================
 LOCK_FILE = os.path.join(BASE_DIR, "printer_tg_bot.lock")
-try:
-    _lock_fd = open(LOCK_FILE, "w")
-    fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    _lock_fd.write(str(os.getpid()))
-    _lock_fd.flush()
-except (IOError, OSError):
-    log.critical("Another printer_tg_bot instance is already running! Exiting.")
-    print("Another instance is already running! Exiting.")
-    sys.exit(0)
+_lock_fd = None
+if fcntl is not None:
+    try:
+        _lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+    except (IOError, OSError):
+        log.critical("Уже запущен другой экземпляр / another instance is already running")
+        print("Another instance is already running! Exiting.")
+        sys.exit(0)
+else:
+    # Windows/без fcntl: блокировка недоступна, запускаемся без неё.
+    # No flock available (Windows): start without the lock.
+    try:
+        with open(LOCK_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+    log.warning("fcntl недоступен: блокировка второго экземпляра отключена / flock unavailable")
 
 detect_environment()
 start_webapp_services()
 
+STATE_SCHEMA_VERSION = 2
+
+
 def migrate_state(st):
+    """Приводит состояние к актуальной схеме, не теряя данные.
+    Migrates state to the current schema without losing data."""
     changed = False
-    if "spools" not in st: st["spools"] = []; changed = True
+    if not isinstance(st.get("spools"), list):
+        st["spools"] = []
+        changed = True
+    clean = [sp for sp in st["spools"] if isinstance(sp, dict)]
+    if len(clean) != len(st["spools"]):
+        st["spools"] = clean
+        changed = True
     for sp in st["spools"]:
         if "mat" not in sp: sp["mat"] = "PLA"; changed = True
         if "group" not in sp: sp["group"] = normalize_color_group(sp.get("name") or sp.get("hex") or ""); changed = True
-        if "rem_g" not in sp: sp["rem_g"] = 0.0; changed = True
+        if "rem_g" not in sp:
+            # Раньше отсутствующий вес превращался в 0, и катушка выпадала из списка.
+            # Previously a missing weight became 0 and the spool disappeared from the list.
+            sp["rem_g"] = DEFAULT_SPOOL_WEIGHT
+            changed = True
+    if st.get("schema_version") != STATE_SCHEMA_VERSION:
+        st["schema_version"] = STATE_SCHEMA_VERSION
+        changed = True
     return changed
 
 _st = load_state()
@@ -2150,20 +2781,31 @@ while True:
                 lines.append("• Расход пластика: <b>~%.1f г</b>%s" % (w, " (промывка CFS: ~%.1f г)" % flush_g if flush_g > 0.1 else ""))
             extra_btns = []
             if cfg("spool_tracking"):
-                slots, active_let, _, _ = get_cfs_slots(); used_items = get_used_slots(fname, meta, slots, active_let, w); st_now = load_state()
-                for let, part_g in used_items:
-                    s_obj = slots.get(let) or {"mat": "PLA", "hex": "000000"}
-                    sp = resolve_slot_spool(st_now, let, s_obj["mat"], s_obj["hex"], auto_create=HAS_CFS)
-                    if sp:
-                        if let == "SINGLE":
-                            lines.append("• Катушка: <b>%s</b> (в наличии %.0f г)" % (esc(sp_title(sp)), sp["rem_g"]))
-                            extra_btns.append([{"text": "🔄 Сменить катушку", "callback_data": "sp_ovslot_SINGLE"}])
-                        else:
-                            w_part_str = "нужно ~%.1f г | " % part_g if len(used_items) > 1 and part_g > 0 else ""
-                            lines.append("• Слот %s: <b>%s</b> (%sв наличии %.0f г)" % (let, esc(sp_title(sp)), w_part_str, sp["rem_g"]))
-                            extra_btns.append([{"text": "🔄 Сменить (Слот %s)" % let, "callback_data": "sp_ovslot_%s" % let}])
-                        if part_g > 0 and sp["rem_g"] < part_g:
-                            lines.append("⚠️ <i>Внимание: не хватит ~%.0f г до конца детали!</i>" % (part_g - sp["rem_g"]))
+                slots, active_let, _, _ = get_cfs_slots()
+                used_items = get_used_slots(fname, meta, slots, active_let, w)
+                spool_rows = []
+
+                def _resolve_slots(st):
+                    # Автосоздание катушек пишем в состояние, а не в локальную копию.
+                    # Auto-created spools must be persisted, not written to a copy.
+                    spool_rows.clear()
+                    for let, part_g in used_items:
+                        s_obj = slots.get(let) or {"mat": "PLA", "hex": "000000"}
+                        sp = resolve_slot_spool(st, let, s_obj["mat"], s_obj["hex"], auto_create=HAS_CFS)
+                        if sp:
+                            spool_rows.append((let, part_g, sp_title(sp), sp["rem_g"]))
+
+                mutate_state(_resolve_slots)
+                for let, part_g, title, rem_g in spool_rows:
+                    if let == "SINGLE":
+                        lines.append("• Катушка: <b>%s</b> (в наличии %.0f г)" % (esc(title), rem_g))
+                        extra_btns.append([{"text": "🔄 Сменить катушку", "callback_data": "sp_ovslot_SINGLE"}])
+                    else:
+                        w_part_str = "нужно ~%.1f г | " % part_g if len(used_items) > 1 and part_g > 0 else ""
+                        lines.append("• Слот %s: <b>%s</b> (%sв наличии %.0f г)" % (let, esc(title), w_part_str, rem_g))
+                        extra_btns.append([{"text": "🔄 Сменить (Слот %s)" % let, "callback_data": "sp_ovslot_%s" % let}])
+                    if part_g > 0 and rem_g < part_g:
+                        lines.append("⚠️ <i>Внимание: не хватит ~%.0f г до конца детали!</i>" % (part_g - rem_g))
             if direct > 0:
                 lines.extend(["", "💰 <b>Расчетная стоимость:</b>",
                     "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)" % (direct, elec),
