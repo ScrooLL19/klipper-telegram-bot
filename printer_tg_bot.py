@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -146,8 +146,8 @@ LANG = {
         "filament_used": "• Расход пластика: <b>~%.1f г</b>",
         "cfs_flush": " (промывка CFS: ~%.1f г)",
         "cost_title": "💰 <b>Расчетная стоимость:</b>",
-        "cost_direct": "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)",
-        "cost_depr": "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)",
+        "cost_direct": "• Прямые (пластик+свет): <b>~%s</b> (свет ~%s)",
+        "cost_depr": "• С амортизацией: <b>~%s</b> (аморт. ~%s)",
         "spool": "• Катушка: <b>%s</b> (в наличии %.0f г)",
         "slot": "• Слот %s: <b>%s</b> (%sв наличии %.0f г)",
         "slot_need": "нужно ~%.1f г | ",
@@ -157,7 +157,7 @@ LANG = {
         "reason": "• Причина: %s",
         "waste_title": "🗑 <b>Потери на брак:</b>",
         "waste_filament": "• Пластик: <b>%.1f г</b>",
-        "waste_cost": "• Прямые затраты: <b>~%.1f руб.</b> (с аморт. ~%.1f руб.)",
+        "waste_cost": "• Прямые затраты: <b>~%s</b> (с аморт. ~%s)",
         "spool_remaining": "%s: осталось <b>%.0f г</b>",
         "spool_prefix": "• Катушка ",
         "spool_tracking_off": "🧵 <b>Учет склада катушек отключен.</b>\nВключить его можно в <b>📱 Панель → Катушки / Настройки</b>.",
@@ -214,7 +214,7 @@ LANG = {
         "stats_filament": "• Расход филамента: <b>%.1f м</b> (~%.1f катушек)",
         "stats_jobs": "• Всего печатей: <b>%d</b>",
         "stats_reliability": "• Рейтинг надежности: <b>%.0f%%</b> (%d из %d без сбоев)",
-        "stats_waste": "• Потери на брак: <b>%.0f г</b> (~%.0f руб. | %.1f%%)",
+        "stats_waste": "• Потери на брак: <b>%.0f г</b> (~%s | %.1f%%)",
         "stats_longest": "• Рекорд печати: <b>%.1f ч</b>",
         "stats_avg": "• В среднем за печать: <b>~%.1f ч / ~%.0f г</b>",
         "stats_load_title": "⏱ <b>Нагрузка принтера (КПД):</b>",
@@ -223,15 +223,15 @@ LANG = {
         "stats_mats_title": "🧵 <b>Расход по типам пластика:</b>",
         "stats_mat_item": "• %s: <b>%.1f м</b> (~%.1f катушек)",
         "stats_costs_title": "💰 <b>Затраты за всё время:</b>",
-        "stats_costs_direct": "• Прямые (пластик+свет): <b>~%.0f руб.</b> (свет ~%.0f руб.)",
-        "stats_costs_depr": "• С учетом амортизации: <b>~%.0f руб.</b> (аморт. ~%.0f руб.)",
+        "stats_costs_direct": "• Прямые (пластик+свет): <b>~%s</b> (свет ~%s)",
+        "stats_costs_depr": "• С учетом амортизации: <b>~%s</b> (аморт. ~%s)",
         "digest_title": "📅 <b>Еженедельный дайджест принтера:</b>",
         "digest_printed": "• Напечатано за неделю: <b>%.1f ч</b> (КПД %.0f%%)",
         "digest_reliability": "• Надежность за неделю: <b>%.0f%%</b> (%d из %d завершено)",
         "digest_filament": "• Расход пластика: <b>%.1f м</b> (~%.1f катушек)",
-        "digest_waste": "• Потери на брак: <b>%.0f г</b> (~%.0f руб.)",
+        "digest_waste": "• Потери на брак: <b>%.0f г</b> (~%s)",
         "digest_mats": "• По материалам: <b>%s</b>",
-        "digest_costs": "• Затраты за неделю: <b>~%.0f руб.</b> (свет ~%.0f руб., с аморт. ~%.0f руб.)",
+        "digest_costs": "• Затраты за неделю: <b>~%s</b> (свет ~%s, с аморт. ~%s)",
         "digest_mat_item": "%s: %.1f м (~%.1f кат.)",
         "bot_started": "✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>",
         "mode_cfs": "CFS (4 слота)",
@@ -326,8 +326,8 @@ LANG = {
         "filament_used": "• Filament: <b>~%.1f g</b>",
         "cfs_flush": " (CFS flush: ~%.1f g)",
         "cost_title": "💰 <b>Estimated cost:</b>",
-        "cost_direct": "• Direct (filament+electricity): <b>~%.1f RUB</b> (electricity ~%.1f RUB)",
-        "cost_depr": "• With depreciation: <b>~%.1f RUB</b> (depr. ~%.1f RUB)",
+        "cost_direct": "• Direct (filament+electricity): <b>~%s</b> (electricity ~%s)",
+        "cost_depr": "• With depreciation: <b>~%s</b> (depr. ~%s)",
         "spool": "• Spool: <b>%s</b> (%.0f g left)",
         "slot": "• Slot %s: <b>%s</b> (%s%.0f g left)",
         "slot_need": "Need ~%.1f g | ",
@@ -337,7 +337,7 @@ LANG = {
         "reason": "• Reason: %s",
         "waste_title": "🗑 <b>Waste:</b>",
         "waste_filament": "• Filament: <b>%.1f g</b>",
-        "waste_cost": "• Cost loss: <b>~%.1f RUB</b> (with depr. ~%.1f RUB)",
+        "waste_cost": "• Cost loss: <b>~%s</b> (with depr. ~%s)",
         "spool_remaining": "%s: <b>%.0f g</b> left",
         "spool_prefix": "• Spool ",
         "spool_tracking_off": "🧵 <b>Spool tracking disabled.</b>\nEnable it in <b>📱 Panel → Spools / Settings</b>.",
@@ -394,7 +394,7 @@ LANG = {
         "stats_filament": "• Filament used: <b>%.1f m</b> (~%.1f spools)",
         "stats_jobs": "• Total prints: <b>%d</b>",
         "stats_reliability": "• Reliability: <b>%.0f%%</b> (%d of %d without failures)",
-        "stats_waste": "• Waste: <b>%.0f g</b> (~%.0f RUB | %.1f%%)",
+        "stats_waste": "• Waste: <b>%.0f g</b> (~%s | %.1f%%)",
         "stats_longest": "• Longest print: <b>%.1f h</b>",
         "stats_avg": "• Average per print: <b>~%.1f h / ~%.0f g</b>",
         "stats_load_title": "⏱ <b>Printer load (efficiency):</b>",
@@ -403,15 +403,15 @@ LANG = {
         "stats_mats_title": "🧵 <b>Usage by material type:</b>",
         "stats_mat_item": "• %s: <b>%.1f m</b> (~%.1f spools)",
         "stats_costs_title": "💰 <b>Total costs:</b>",
-        "stats_costs_direct": "• Direct (filament+electricity): <b>~%.0f RUB</b> (electricity ~%.0f RUB)",
-        "stats_costs_depr": "• With depreciation: <b>~%.0f RUB</b> (depr. ~%.0f RUB)",
+        "stats_costs_direct": "• Direct (filament+electricity): <b>~%s</b> (electricity ~%s)",
+        "stats_costs_depr": "• With depreciation: <b>~%s</b> (depr. ~%s)",
         "digest_title": "📅 <b>Weekly printer digest:</b>",
         "digest_printed": "• Printed this week: <b>%.1f h</b> (efficiency %.0f%%)",
         "digest_reliability": "• Reliability this week: <b>%.0f%%</b> (%d of %d completed)",
         "digest_filament": "• Filament used: <b>%.1f m</b> (~%.1f spools)",
-        "digest_waste": "• Waste: <b>%.0f g</b> (~%.0f RUB)",
+        "digest_waste": "• Waste: <b>%.0f g</b> (~%s)",
         "digest_mats": "• By material: <b>%s</b>",
-        "digest_costs": "• Weekly costs: <b>~%.0f RUB</b> (electricity ~%.0f RUB, with depr. ~%.0f RUB)",
+        "digest_costs": "• Weekly costs: <b>~%s</b> (electricity ~%s, with depr. ~%s)",
         "digest_mat_item": "%s: %.1f m (~%.1f spools)",
         "bot_started": "✅ <b>Printer monitor started (v%s)</b>\nMode: <b>%s</b>",
         "mode_cfs": "CFS (4 slots)",
@@ -494,7 +494,28 @@ def _set_language(lang):
     WELCOME_KB = get_welcome_kb()
     MAINT_KB = get_maint_kb()
     RESET_KB = get_reset_kb()
+    _refresh_menu_button()
     return lang
+
+
+def _refresh_menu_button():
+    """Обновляет кнопку Mini App в чате под текущий язык.
+    Refreshes the chat Mini App button for the current language."""
+    url = globals().get("PUBLIC_WEBAPP_URL") or ""
+    if not url:
+        return
+    try:
+        res = tg_api("setChatMenuButton", {
+            "chat_id": CHAT_ID,
+            "menu_button": json.dumps({
+                "type": "web_app",
+                "text": t("webapp_panel"),
+                "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)},
+            }),
+        })
+        log.info("setChatMenuButton: %s", res)
+    except Exception as e:
+        log.warning("setChatMenuButton failed: %s", e)
 
 
 def get_language():
@@ -1046,12 +1067,48 @@ def cfg(key):
         "depr_hour": DEPRECIATION_PER_HOUR,
         "price_default": FILAMENT_PRICE_KG,
         "prices": dict(FILAMENT_PRICE_BY_TYPE),
+        "currency": "RUB",
+        "currency_rate": 1.0,
     }
     return defaults.get(key)
 
 def cfg_price(mat):
     prices = cfg("prices") or FILAMENT_PRICE_BY_TYPE
     return float(prices.get(str(mat).upper(), cfg("price_default")))
+
+
+# Все суммы в состоянии и истории хранятся в рублях; валюта — только для вывода.
+# All amounts are stored in RUB; the currency is applied on display only.
+CURRENCY_SYMBOLS = {"RUB": "₽", "USD": "$", "EUR": "€"}
+
+
+def currency_code():
+    code = str(cfg("currency") or "RUB").upper()
+    return code if code in CURRENCY_SYMBOLS else "RUB"
+
+
+def currency_rate():
+    """Сколько единиц валюты в 1 рубль (для RUB — 1.0).
+    How many currency units per 1 RUB (1.0 for RUB)."""
+    try:
+        rate = float(cfg("currency_rate"))
+    except (TypeError, ValueError):
+        rate = 1.0
+    return rate if rate > 0 else 1.0
+
+
+def money(value_rub, decimals=0):
+    """Сумма в валюте пользователя: 1234 ₽ / $13.57.
+    Formats a RUB amount in the user's currency."""
+    try:
+        value = float(value_rub) * currency_rate()
+    except (TypeError, ValueError):
+        value = 0.0
+    fmt = "%." + str(int(decimals)) + "f"
+    text = fmt % value
+    if currency_code() == "RUB":
+        return text + " " + CURRENCY_SYMBOLS["RUB"]
+    return CURRENCY_SYMBOLS[currency_code()] + text
 
 COLOR_PALETTE = (
     ((228, 238, 155), "Светло-желтый", "Желтый"),
@@ -1516,7 +1573,7 @@ def format_stats():
         lines.append(t("stats_reliability", ok_all * 100.0 / hist_len, ok_all, hist_len))
     if waste_g > 0:
         w_pct = (waste_g * 100.0 / total_g) if total_g > 0 else 0
-        lines.append(t("stats_waste", waste_g, waste_rub, w_pct))
+        lines.append(t("stats_waste", waste_g, money(waste_rub), w_pct))
     lines.extend([
         t("stats_longest", longest_h),
         t("stats_avg", (h / jobs if jobs else 0), (total_g / jobs if jobs else 0)),
@@ -1533,8 +1590,8 @@ def format_stats():
     lines.extend([
         "",
         t("stats_costs_title"),
-        t("stats_costs_direct", direct, elec),
-        t("stats_costs_depr", direct + depr, depr),
+        t("stats_costs_direct", money(direct), money(elec)),
+        t("stats_costs_depr", money(direct + depr), money(depr)),
     ])
     return "\n".join(lines)
 
@@ -1569,12 +1626,12 @@ def check_weekly_digest():
             t("digest_filament", m_7d, m_7d / M_PER_SPOOL),
         ]
         if w_waste_g > 0:
-            lines.append(t("digest_waste", w_waste_g, w_waste_rub))
+            lines.append(t("digest_waste", w_waste_g, money(w_waste_rub)))
         if week_mats:
             parts = [t("digest_mat_item", k, week_mats[k], week_mats[k] / M_PER_SPOOL)
                      for k in sorted(week_mats, key=week_mats.get, reverse=True)]
             lines.append(t("digest_mats", ", ".join(parts)))
-        lines.append(t("digest_costs", direct, elec, full))
+        lines.append(t("digest_costs", money(direct), money(elec), money(full)))
         tg_send("\n".join(lines), MAIN_KB)
 
 # ==================== 8. ЗАВЕРШЕНИЕ ПЕЧАТИ ====================
@@ -1593,8 +1650,8 @@ def process_completed_job(fname, meta, print_dur, used_mm, send_video=True):
     if spool_notes: lines.append(spool_notes)
     if direct > 0:
         lines.extend(["", t("actual_cost"),
-            t("cost_direct", direct, elec),
-            t("cost_depr", full, depr)])
+            t("cost_direct", money(direct), money(elec)),
+            t("cost_depr", money(full), money(depr))])
     totals = get_history_totals()
     if totals: lines.extend(["", format_consumables()])
     if send_video:
@@ -2070,7 +2127,9 @@ def build_webapp_payload():
             "elec_price": cfg("elec_price"),
             "power_kw": cfg("power_kw"),
             "depr_hour": cfg("depr_hour"),
-            "prices": cfg("prices")
+            "prices": cfg("prices"),
+            "currency": cfg("currency"),
+            "currency_rate": cfg("currency_rate"),
         },
         "printer": {
             "state": ps.get("state", "unknown"), "filename": ps.get("filename", ""),
@@ -2545,13 +2604,19 @@ class WebAppHandler(BaseHTTPRequestHandler):
     def _handle_settings_save(self, params):
         int_keys = ("timezone_offset", "digest_hour", "cutter_cuts", "cfs_humidity")
         float_keys = ("maint_hours", "nozzle_meters", "filter_hours", "ptfe_meters",
-                      "elec_price", "power_kw", "depr_hour")
+                      "elec_price", "power_kw", "depr_hour", "currency_rate")
         bad = []
 
         def _apply(st):
             settings = st.get("settings") or {}
             if "spool_tracking" in params:
                 settings["spool_tracking"] = _as_bool(params["spool_tracking"])
+            if "currency" in params:
+                code = str(params["currency"] or "").strip().upper()
+                if code in CURRENCY_SYMBOLS:
+                    settings["currency"] = code
+                else:
+                    bad.append("currency")
             for key in int_keys:
                 if key in params and str(params[key]).strip() != "":
                     val = _as_int(params[key])
@@ -2872,11 +2937,7 @@ def _tunnel_worker():
                     if url != PUBLIC_WEBAPP_URL:
                         PUBLIC_WEBAPP_URL = url
                         log.info("Mini App URL: %s", url)
-                        res = tg_api("setChatMenuButton", {
-                            "chat_id": CHAT_ID,
-                            "menu_button": json.dumps({"type": "web_app", "text": t("webapp_panel"), "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)}})
-                        })
-                        log.info("setChatMenuButton: %s", res)
+                        _refresh_menu_button()
             proc.wait()
             _tunnel_proc = None
         except Exception as e:
@@ -3015,8 +3076,8 @@ while True:
                         lines.append(t("low_filament", part_g - rem_g))
             if direct > 0:
                 lines.extend(["", t("cost_title"),
-                    t("cost_direct", direct, elec),
-                    t("cost_depr", full, depr)])
+                    t("cost_direct", money(direct), money(elec)),
+                    t("cost_depr", money(full), money(depr))])
             start_kb = {"inline_keyboard": MAIN_KB["inline_keyboard"] + extra_btns} if extra_btns else MAIN_KB
             send_thumbnail(meta, "\n".join(lines), start_kb)
         elif state == "paused" and last_state != "paused":
@@ -3040,7 +3101,7 @@ while True:
             if w > 0.5 or direct > 0.5:
                 lines.extend(["", t("waste_title"),
                     t("waste_filament", w),
-                    t("waste_cost", direct, full)])
+                    t("waste_cost", money(direct), money(full))])
             if spool_notes: lines.extend(["", spool_notes])
             out_txt = "\n".join(lines)
             if state == "error": send_usb_photo(out_txt, MAIN_KB)

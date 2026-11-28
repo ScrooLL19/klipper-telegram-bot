@@ -497,6 +497,23 @@
     </div>
 
     <div class="card">
+      <div class="title" data-i18n="currency_title">💱 Валюта отображения</div>
+      <div class="input-row">
+        <label data-i18n="currency_code_label">Валюта</label>
+        <select id="inp-currency">
+          <option value="RUB">₽ RUB</option>
+          <option value="USD">$ USD</option>
+          <option value="EUR">€ EUR</option>
+        </select>
+      </div>
+      <div class="input-row">
+        <label data-i18n="currency_rate_label">Курс: единиц за 1 ₽</label>
+        <input type="number" step="0.0001" id="inp-currency-rate">
+      </div>
+      <div style="font-size:12px;color:#8b95a5" data-i18n="currency_hint">Суммы хранятся в рублях, пересчёт — только для отображения</div>
+    </div>
+
+    <div class="card">
       <div class="title" data-i18n="filament_prices">🧵 Цены пластика (руб/кг)</div>
       <div id="prices-list"></div>
     </div>
@@ -666,6 +683,10 @@
         "update_error": "Ошибка проверки",
         "update_installing": "Установка...",
         "settings_saved": "Настройки сохранены",
+        "currency_title": "💱 Валюта отображения",
+        "currency_code_label": "Валюта",
+        "currency_rate_label": "Курс: единиц за 1 ₽",
+        "currency_hint": "Суммы хранятся в рублях, пересчёт — только для отображения",
         "spool_saved": "Катушка сохранена",
         "confirm_delete": "Удалить катушку?",
         "axis_moving": "Прогон оси...",
@@ -772,6 +793,10 @@
         "update_error": "Check error",
         "update_installing": "Installing...",
         "settings_saved": "Settings saved",
+        "currency_title": "💱 Display currency",
+        "currency_code_label": "Currency",
+        "currency_rate_label": "Rate: units per 1 RUB",
+        "currency_hint": "Amounts are stored in RUB; conversion is for display only",
         "spool_saved": "Spool saved",
         "confirm_delete": "Delete spool?",
         "axis_moving": "Moving axis...",
@@ -958,10 +983,13 @@
     }
 
     function toggleLight() {
+      const btn = document.querySelector('[data-i18n="light_btn"]');
       apiPost('/api/light/toggle', {}).then(r => {
-        if (r.light_on) alert(t('light_on'));
-        else alert(t('light_off'));
-      });
+        if (!btn) return;
+        const on = !!(r && r.light_on);
+        btn.style.background = on ? 'rgba(255, 205, 60, .25)' : '';
+        btn.style.borderColor = on ? '#ffcd3c' : '';
+      }).catch(() => {});
     }
 
     function moveAxis(axis) {
@@ -1244,6 +1272,9 @@
       document.getElementById('inp-humidity').value = s.cfs_humidity || '';
       document.getElementById('inp-tz').value = s.timezone_offset || '';
       document.getElementById('inp-digest').value = s.digest_hour || '';
+      const curSel = document.getElementById('inp-currency');
+      if (curSel) curSel.value = s.currency || 'RUB';
+      document.getElementById('inp-currency-rate').value = (s.currency_rate !== undefined) ? s.currency_rate : 1;
       document.getElementById('spool-toggle').checked = s.spool_tracking !== false;
       const prices = s.prices || {};
       const pricesDiv = document.getElementById('prices-list');
@@ -1273,6 +1304,8 @@
         cfs_humidity: parseInt(document.getElementById('inp-humidity').value),
         timezone_offset: parseInt(document.getElementById('inp-tz').value),
         digest_hour: parseInt(document.getElementById('inp-digest').value),
+        currency: document.getElementById('inp-currency').value,
+        currency_rate: parseFloat(document.getElementById('inp-currency-rate').value) || 1,
         spool_tracking: document.getElementById('spool-toggle').checked,
         prices_json: JSON.stringify(prices)
       };
