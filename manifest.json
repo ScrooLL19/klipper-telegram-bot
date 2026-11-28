@@ -1,14 +1,14 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "min_version": "1.0.0",
   "files": {
     "printer_tg_bot.py": {
-      "sha256": "b5f23476ba1cdf69693477e5cbf7212637c08bc4e62877f444d4b6022a7fb28d",
-      "size": 151363
+      "sha256": "806c43ad771e66a9f46f8c05c709a45b84ceb2388e4d4aa8f4cff2aedc18c094",
+      "size": 152342
     },
     "webapp.html": {
-      "sha256": "32c7256ae94e68d072154f86671a683a1669d446ae8cfe3ad1c2060b4c0fa2fc",
-      "size": 57192
+      "sha256": "8e543f31331fb88e22f6c59909de8415d14397bffe274b4bb882db2c86c9f5fa",
+      "size": 57231
     }
   }
 }

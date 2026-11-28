@@ -483,7 +483,7 @@
     <div class="card">
       <div class="title" data-i18n="tariffs_title">💰 Тарифы и амортизация</div>
       <div class="input-row">
-        <label data-i18n="tariffs_elec">Свет (руб/кВт·ч)</label>
+        <label data-i18n="tariffs_elec">Свет (за кВт·ч)</label>
         <input type="number" step="0.01" id="inp-elec">
       </div>
       <div class="input-row">
@@ -491,13 +491,13 @@
         <input type="number" step="0.01" id="inp-power">
       </div>
       <div class="input-row">
-        <label data-i18n="tariffs_depr">Амортизация (руб/ч)</label>
+        <label data-i18n="tariffs_depr">Амортизация (в час)</label>
         <input type="number" step="0.01" id="inp-depr">
       </div>
     </div>
 
     <div class="card">
-      <div class="title" data-i18n="currency_title">💱 Валюта отображения</div>
+      <div class="title" data-i18n="currency_title">💱 Валюта цен</div>
       <div class="input-row">
         <label data-i18n="currency_code_label">Валюта</label>
         <select id="inp-currency">
@@ -506,15 +506,11 @@
           <option value="EUR">€ EUR</option>
         </select>
       </div>
-      <div class="input-row">
-        <label data-i18n="currency_rate_label">Курс: единиц за 1 ₽</label>
-        <input type="number" step="0.0001" id="inp-currency-rate">
-      </div>
-      <div style="font-size:12px;color:#8b95a5" data-i18n="currency_hint">Суммы хранятся в рублях, пересчёт — только для отображения</div>
+      <div style="font-size:12px;color:#8b95a5" data-i18n="currency_hint">Все суммы и цены вводятся и отображаются в этой валюте — без пересчёта по курсу</div>
     </div>
 
     <div class="card">
-      <div class="title" data-i18n="filament_prices">🧵 Цены пластика (руб/кг)</div>
+      <div class="title" data-i18n="filament_prices">🧵 Цены пластика (за кг)</div>
       <div id="prices-list"></div>
     </div>
 
@@ -650,10 +646,10 @@
         "update_install": "⬇️ Установить",
         "lang_title": "🌐 Язык / Language",
         "tariffs_title": "💰 Тарифы и амортизация",
-        "tariffs_elec": "Свет (руб/кВт·ч)",
+        "tariffs_elec": "Свет (за кВт·ч)",
         "tariffs_power": "Мощность (кВт)",
-        "tariffs_depr": "Амортизация (руб/ч)",
-        "filament_prices": "🧵 Цены пластика (руб/кг)",
+        "tariffs_depr": "Амортизация (в час)",
+        "filament_prices": "🧵 Цены пластика (за кг)",
         "maint_limits": "🔩 Лимиты ТО и уведомления",
         "maint_interval": "Интервал ТО (ч)",
         "nozzle_limit": "Ресурс сопла (м)",
@@ -683,10 +679,9 @@
         "update_error": "Ошибка проверки",
         "update_installing": "Установка...",
         "settings_saved": "Настройки сохранены",
-        "currency_title": "💱 Валюта отображения",
+        "currency_title": "💱 Валюта цен",
         "currency_code_label": "Валюта",
-        "currency_rate_label": "Курс: единиц за 1 ₽",
-        "currency_hint": "Суммы хранятся в рублях, пересчёт — только для отображения",
+        "currency_hint": "Все суммы и цены вводятся и отображаются в этой валюте — без пересчёта по курсу",
         "spool_saved": "Катушка сохранена",
         "confirm_delete": "Удалить катушку?",
         "axis_moving": "Прогон оси...",
@@ -760,10 +755,10 @@
         "update_install": "⬇️ Install",
         "lang_title": "🌐 Language",
         "tariffs_title": "💰 Tariffs & depreciation",
-        "tariffs_elec": "Electricity (RUB/kWh)",
+        "tariffs_elec": "Electricity (per kWh)",
         "tariffs_power": "Power (kW)",
-        "tariffs_depr": "Depreciation (RUB/h)",
-        "filament_prices": "🧵 Filament prices (RUB/kg)",
+        "tariffs_depr": "Depreciation (per hour)",
+        "filament_prices": "🧵 Filament prices (per kg)",
         "maint_limits": "🔩 Maintenance limits & notifications",
         "maint_interval": "Maintenance interval (h)",
         "nozzle_limit": "Nozzle life (m)",
@@ -793,10 +788,9 @@
         "update_error": "Check error",
         "update_installing": "Installing...",
         "settings_saved": "Settings saved",
-        "currency_title": "💱 Display currency",
+        "currency_title": "💱 Price currency",
         "currency_code_label": "Currency",
-        "currency_rate_label": "Rate: units per 1 RUB",
-        "currency_hint": "Amounts are stored in RUB; conversion is for display only",
+        "currency_hint": "All amounts and prices are entered and shown in this currency — no exchange-rate conversion",
         "spool_saved": "Spool saved",
         "confirm_delete": "Delete spool?",
         "axis_moving": "Moving axis...",
@@ -1171,8 +1165,8 @@
         <div class="stat-row"><span class="label">${t('stats_filament')}</span><span class="val">${s.meters} м (~${s.spools_cnt} кат.)</span></div>
         <div class="stat-row"><span class="label">${t('stats_jobs')}</span><span class="val">${s.jobs} (${s.reliability}%)</span></div>
         <div class="stat-row"><span class="label">${t('stats_longest')}</span><span class="val">${longestStr}</span></div>
-        <div class="stat-row"><span class="label">${t('stats_material_cost')}</span><span class="val">${s.direct_rub} ₽ (свет ~${s.elec_rub} ₽)</span></div>
-        <div class="stat-row"><span class="label">${t('stats_with_depr')}</span><span class="val">${s.full_rub} ₽</span></div>
+        <div class="stat-row"><span class="label">${t('stats_material_cost')}</span><span class="val">${money(s.direct_rub)} (⚡ ~${money(s.elec_rub)})</span></div>
+        <div class="stat-row"><span class="label">${t('stats_with_depr')}</span><span class="val">${money(s.full_rub)}</span></div>
       `;
       renderDonut(s.materials || {});
       renderBarChart(s.days_labels || [], s.days_hours || []);
@@ -1258,6 +1252,15 @@
       }).join('');
     }
 
+    // Суммы хранятся в валюте пользователя; символ — только оформление.
+    // Amounts are kept in the user's currency; the symbol is formatting only.
+    function money(v) {
+      const code = (STATE && STATE.settings && STATE.settings.currency) || 'RUB';
+      const sym = { RUB: '₽', USD: '$', EUR: '€' }[code] || '';
+      const n = Math.round(Number(v) || 0);
+      return code === 'RUB' ? `${n} ${sym}` : `${sym}${n}`;
+    }
+
     function renderSettings() {
       const s = STATE.settings || {};
       document.getElementById('app-ver').textContent = 'v' + (STATE.version || '1.0.0');
@@ -1274,7 +1277,6 @@
       document.getElementById('inp-digest').value = s.digest_hour || '';
       const curSel = document.getElementById('inp-currency');
       if (curSel) curSel.value = s.currency || 'RUB';
-      document.getElementById('inp-currency-rate').value = (s.currency_rate !== undefined) ? s.currency_rate : 1;
       document.getElementById('spool-toggle').checked = s.spool_tracking !== false;
       const prices = s.prices || {};
       const pricesDiv = document.getElementById('prices-list');
@@ -1305,7 +1307,6 @@
         timezone_offset: parseInt(document.getElementById('inp-tz').value),
         digest_hour: parseInt(document.getElementById('inp-digest').value),
         currency: document.getElementById('inp-currency').value,
-        currency_rate: parseFloat(document.getElementById('inp-currency-rate').value) || 1,
         spool_tracking: document.getElementById('spool-toggle').checked,
         prices_json: JSON.stringify(prices)
       };

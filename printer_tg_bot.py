@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -1067,8 +1067,7 @@ def cfg(key):
         "depr_hour": DEPRECIATION_PER_HOUR,
         "price_default": FILAMENT_PRICE_KG,
         "prices": dict(FILAMENT_PRICE_BY_TYPE),
-        "currency": "RUB",
-        "currency_rate": 1.0,
+        "currency": "",
     }
     return defaults.get(key)
 
@@ -1077,38 +1076,38 @@ def cfg_price(mat):
     return float(prices.get(str(mat).upper(), cfg("price_default")))
 
 
-# Все суммы в состоянии и истории хранятся в рублях; валюта — только для вывода.
-# All amounts are stored in RUB; the currency is applied on display only.
+# Суммы хранятся в валюте, в которой их ввёл пользователь; символ — только
+# оформление. Курсов и конвертации нет: русскоязычный вводит рубли,
+# англоязычный — доллары, и ничего не пересчитывается.
+# Amounts are stored in the currency the user entered them in; the symbol is
+# formatting only. There are no rates or conversion: a Russian-speaking user
+# enters rubles, an English-speaking user enters dollars, nothing is converted.
 CURRENCY_SYMBOLS = {"RUB": "₽", "USD": "$", "EUR": "€"}
+DEFAULT_CURRENCY_BY_LANG = {"ru": "RUB", "en": "USD"}
 
 
 def currency_code():
-    code = str(cfg("currency") or "RUB").upper()
-    return code if code in CURRENCY_SYMBOLS else "RUB"
+    """Валюта пользователя: из настроек, иначе по языку (ru→RUB, en→USD).
+    User currency from settings, otherwise derived from the language."""
+    code = str(cfg("currency") or "").upper()
+    if code in CURRENCY_SYMBOLS:
+        return code
+    return DEFAULT_CURRENCY_BY_LANG.get(get_language(), "RUB")
 
 
-def currency_rate():
-    """Сколько единиц валюты в 1 рубль (для RUB — 1.0).
-    How many currency units per 1 RUB (1.0 for RUB)."""
+def money(value, decimals=0):
+    """Сумма в валюте пользователя без пересчёта: 1234 ₽ / $1200.
+    Formats an amount in the user's currency without conversion."""
     try:
-        rate = float(cfg("currency_rate"))
-    except (TypeError, ValueError):
-        rate = 1.0
-    return rate if rate > 0 else 1.0
-
-
-def money(value_rub, decimals=0):
-    """Сумма в валюте пользователя: 1234 ₽ / $13.57.
-    Formats a RUB amount in the user's currency."""
-    try:
-        value = float(value_rub) * currency_rate()
+        value = float(value)
     except (TypeError, ValueError):
         value = 0.0
     fmt = "%." + str(int(decimals)) + "f"
     text = fmt % value
-    if currency_code() == "RUB":
-        return text + " " + CURRENCY_SYMBOLS["RUB"]
-    return CURRENCY_SYMBOLS[currency_code()] + text
+    code = currency_code()
+    if code == "RUB":
+        return text + " " + CURRENCY_SYMBOLS[code]
+    return CURRENCY_SYMBOLS[code] + text
 
 COLOR_PALETTE = (
     ((228, 238, 155), "Светло-желтый", "Желтый"),
@@ -2128,8 +2127,8 @@ def build_webapp_payload():
             "power_kw": cfg("power_kw"),
             "depr_hour": cfg("depr_hour"),
             "prices": cfg("prices"),
-            "currency": cfg("currency"),
-            "currency_rate": cfg("currency_rate"),
+            "currency": currency_code(),
+            "currency_symbol": CURRENCY_SYMBOLS[currency_code()],
         },
         "printer": {
             "state": ps.get("state", "unknown"), "filename": ps.get("filename", ""),
@@ -2604,7 +2603,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
     def _handle_settings_save(self, params):
         int_keys = ("timezone_offset", "digest_hour", "cutter_cuts", "cfs_humidity")
         float_keys = ("maint_hours", "nozzle_meters", "filter_hours", "ptfe_meters",
-                      "elec_price", "power_kw", "depr_hour", "currency_rate")
+                      "elec_price", "power_kw", "depr_hour")
         bad = []
 
         def _apply(st):
@@ -3002,6 +3001,18 @@ def migrate_state(st):
             # Previously a missing weight became 0 and the spool disappeared from the list.
             sp["rem_g"] = DEFAULT_SPOOL_WEIGHT
             changed = True
+    settings = st.get("settings")
+    if not isinstance(settings, dict):
+        settings = {}
+        st["settings"] = settings
+        changed = True
+    # Курс валюты больше не используется: суммы хранятся в валюте пользователя.
+    # The exchange rate is gone: amounts are stored in the user's currency.
+    if settings.pop("currency_rate", None) is not None:
+        changed = True
+    if settings.get("currency") not in CURRENCY_SYMBOLS:
+        settings["currency"] = DEFAULT_CURRENCY_BY_LANG.get(settings.get("language", "ru"), "RUB")
+        changed = True
     if st.get("schema_version") != STATE_SCHEMA_VERSION:
         st["schema_version"] = STATE_SCHEMA_VERSION
         changed = True
