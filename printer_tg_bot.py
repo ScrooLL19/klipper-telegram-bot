@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -283,6 +283,14 @@ LANG = {
         "days_short": "Пн,Вт,Ср,Чт,Пт,Сб,Вс",
         "dur_hm": "%d ч %d мин",
         "dur_m": "%d мин",
+        "update_started": "🔄 <b>Обновление запущено:</b> v%s → v%s",
+        "update_stage_download": "📥 Скачивание %d/%d: <code>%s</code>",
+        "update_stage_verify": "🔐 Проверка целостности (sha256)...",
+        "update_stage_backup": "💾 Резервная копия текущих файлов...",
+        "update_stage_apply": "⚙️ Применение обновления...",
+        "update_stage_restart": "🔁 Перезапуск на v%s...",
+        "update_done": "✅ <b>Обновление завершено:</b> v%s → v%s\nТекущая версия: <b>v%s</b>",
+        "update_rollback": "↩️ Откат / rollback: %s",
     },
     "en": {
         "menu_status": "📊 Status",
@@ -451,6 +459,14 @@ LANG = {
         "days_short": "Mon,Tue,Wed,Thu,Fri,Sat,Sun",
         "dur_hm": "%d h %d min",
         "dur_m": "%d min",
+        "update_started": "🔄 <b>Update started:</b> v%s → v%s",
+        "update_stage_download": "📥 Downloading %d/%d: <code>%s</code>",
+        "update_stage_verify": "🔐 Verifying integrity (sha256)...",
+        "update_stage_backup": "💾 Backing up current files...",
+        "update_stage_apply": "⚙️ Applying the update...",
+        "update_stage_restart": "🔁 Restarting on v%s...",
+        "update_done": "✅ <b>Update complete:</b> v%s → v%s\nCurrent version: <b>v%s</b>",
+        "update_rollback": "↩️ Rollback: %s",
     }
 }
 
@@ -580,6 +596,7 @@ WEBAPP_PORT = 8088
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/ScrooLL19/klipper-telegram-bot/main"
 GITHUB_MIRROR_BASE = "https://cdn.jsdelivr.net/gh/ScrooLL19/klipper-telegram-bot@main"
 MANIFEST_FILE = os.path.join(BASE_DIR, "manifest.json")
+PENDING_UPDATE_FILE = os.path.join(BASE_DIR, "pending_update.json")
 UPDATE_STAGING = os.path.join(BASE_DIR, "update_staging")
 UPDATE_BACKUP = os.path.join(BASE_DIR, "update_backup")
 
@@ -2182,6 +2199,41 @@ def check_for_updates():
         return None
 
 
+_update_lock = threading.Lock()
+_update_running = [False]
+_update_stage = {"stage": "idle", "message": ""}
+
+
+def _update_set_stage(stage, message=""):
+    """Фиксирует текущий этап обновления для панели и лога.
+    Records the current update stage for the panel and the log."""
+    _update_stage["stage"] = stage
+    _update_stage["message"] = message
+    log.info("OTA stage=%s %s", stage, message)
+
+
+def _update_start_message(text):
+    """Отправляет первое сообщение об обновлении и возвращает его id.
+    Sends the first update message and returns its message id."""
+    res = tg_api("sendMessage", {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"})
+    try:
+        return res.get("result", {}).get("message_id")
+    except Exception:
+        return None
+
+
+def _update_edit(msg_id, text):
+    """Редактирует сообщение о ходе обновления (или отправляет новое).
+    Edits the update progress message, or sends a new one."""
+    try:
+        if msg_id:
+            tg_edit(msg_id, text)
+        else:
+            tg_send(text)
+    except Exception:
+        pass
+
+
 def _download_verified(name, meta, dest):
     """Скачивает файл и сверяет sha256, перебирая все зеркала.
     Downloads a file and verifies sha256, trying every mirror."""
@@ -2209,64 +2261,89 @@ def _download_verified(name, meta, dest):
     return False
 
 
-_update_lock = threading.Lock()
-_update_running = [False]
-
-
 def apply_update(update_info):
-    """Поэтапное обновление: скачать -> проверить -> забэкапить -> заменить.
-    При любой ошибке — откат к предыдущей версии.
-    Staged update with hash verification and rollback on failure."""
+    """Поэтапное обновление с уведомлениями в чат.
+    Staged update with progress notifications in the chat."""
     with _update_lock:
         if _update_running[0]:
             log.warning("Обновление уже выполняется / update already running")
             return
         _update_running[0] = True
+
     manifest = update_info.get("manifest") or {}
     files = manifest.get("files") or {}
     new_version = str(manifest.get("version") or update_info.get("version") or "")
     replaced = []
+    msg_id = None
+    stage = "prepare"
     try:
         if not files:
             raise RuntimeError("empty manifest")
+
+        msg_id = _update_start_message(t("update_started", VERSION, new_version))
+        _update_set_stage(stage)
+
         shutil.rmtree(UPDATE_STAGING, ignore_errors=True)
         shutil.rmtree(UPDATE_BACKUP, ignore_errors=True)
         os.makedirs(UPDATE_STAGING)
         os.makedirs(UPDATE_BACKUP)
 
-        # 1. Скачиваем во временную папку и проверяем целостность
-        #    Download into staging and verify integrity.
-        for name, meta in files.items():
-            dest = os.path.join(UPDATE_STAGING, name)
-            if not _download_verified(name, meta, dest):
+        # 1. Скачивание / download.
+        total = len(files)
+        for index, (name, meta) in enumerate(files.items(), 1):
+            stage = "download"
+            _update_set_stage(stage, name)
+            _update_edit(msg_id, t("update_stage_download", index, total, name))
+            if not _download_verified(name, meta, os.path.join(UPDATE_STAGING, name)):
                 raise RuntimeError("не удалось скачать %s" % name)
+
+        # 2. Проверка целостности / integrity check.
+        stage = "verify"
+        _update_set_stage(stage)
+        _update_edit(msg_id, t("update_stage_verify"))
+        for name in files:
+            path = os.path.join(UPDATE_STAGING, name)
             if name.endswith(".py"):
-                with open(dest, "r", encoding="utf-8") as f:
-                    compile(f.read(), dest, "exec")
+                with open(path, "r", encoding="utf-8") as f:
+                    compile(f.read(), path, "exec")
             elif name.endswith(".html"):
-                with open(dest, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     if "</html>" not in f.read():
                         raise RuntimeError("webapp.html повреждён")
 
-        # 2. Бэкап текущих файлов / back up current files.
+        # 3. Резервная копия / backup.
+        stage = "backup"
+        _update_set_stage(stage)
+        _update_edit(msg_id, t("update_stage_backup"))
         for name in files:
             current = os.path.join(BASE_DIR, name)
             if os.path.exists(current):
                 shutil.copyfile(current, os.path.join(UPDATE_BACKUP, name))
 
-        # 3. Атомарная замена / atomic replace.
+        # 4. Применение / apply.
+        stage = "apply"
+        _update_set_stage(stage)
+        _update_edit(msg_id, t("update_stage_apply"))
         for name in files:
             os.replace(os.path.join(UPDATE_STAGING, name), os.path.join(BASE_DIR, name))
             replaced.append(name)
         with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
 
+        # 5. Перезапуск / restart.
+        stage = "restart"
+        _update_set_stage(stage)
+        _update_edit(msg_id, t("update_stage_restart", new_version))
+        try:
+            with open(PENDING_UPDATE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"from": VERSION, "to": new_version}, f)
+        except OSError:
+            pass
         log.info("Обновление применено: %s -> %s (%s)",
                  VERSION, new_version, ", ".join(replaced))
-        tg_send("✅ <b>Обновление применено:</b> v%s → v%s\nБот перезапускается..."
-                % (VERSION, new_version), MAIN_KB)
         shutil.rmtree(UPDATE_STAGING, ignore_errors=True)
         shutil.rmtree(UPDATE_BACKUP, ignore_errors=True)
+        time.sleep(2)
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
         log.exception("Ошибка обновления / update failed: %s", e)
@@ -2280,35 +2357,32 @@ def apply_update(update_info):
                 except OSError:
                     pass
         shutil.rmtree(UPDATE_STAGING, ignore_errors=True)
-        tg_send("⚠️ <b>Ошибка обновления:</b> %s\nОткат / rollback: %s"
-                % (esc(str(e)), ", ".join(restored) or "—"), MAIN_KB)
+        text = t("update_error", esc(str(e)))
+        if restored:
+            text += "\n" + t("update_rollback", ", ".join(restored))
+        _update_edit(msg_id, text)
+        _update_set_stage("failed", stage)
     finally:
         with _update_lock:
             _update_running[0] = False
 
 
-def _as_int(value, default=None):
-    """Безопасное приведение к int, None при ошибке.
-    Safe int conversion; returns the default on failure."""
+def _confirm_pending_update():
+    """Сообщает об успешном обновлении после перезапуска.
+    Reports a successful update after the restart."""
+    if not os.path.exists(PENDING_UPDATE_FILE):
+        return
     try:
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_float(value, default=None):
-    """Безопасное приведение к float (запятая как разделитель тоже).
-    Safe float conversion; accepts a comma as the decimal separator."""
+        with open(PENDING_UPDATE_FILE, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        os.remove(PENDING_UPDATE_FILE)
+    except Exception as e:
+        log.warning("Не удалось прочитать флаг обновления / pending update: %s", e)
+        return
     try:
-        return float(str(value).strip().replace(",", "."))
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_bool(value, default=False):
-    if value is None:
-        return default
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
+        tg_send(t("update_done", info.get("from", "?"), info.get("to", VERSION), VERSION), MAIN_KB)
+    except Exception:
+        pass
 
 
 class WebAppHandler(BaseHTTPRequestHandler):
@@ -2364,6 +2438,14 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self._handle_light_toggle()
             elif path == "/api/settings/language":
                 self._handle_language(params)
+            elif path == "/api/update/status":
+                self._send_json(200, {
+                    "ok": True,
+                    "running": bool(_update_running[0]),
+                    "stage": _update_stage.get("stage", "idle"),
+                    "message": _update_stage.get("message", ""),
+                    "current_version": VERSION,
+                })
             elif path == "/api/update/check":
                 update = check_for_updates()
                 if update:
@@ -2817,6 +2899,7 @@ if migrate_state(_st):
 
 mode_str = t("mode_cfs") if HAS_CFS else t("mode_single")
 tg_send(t("bot_started", VERSION, mode_str), WELCOME_KB)
+_confirm_pending_update()
 
 threading.Thread(target=check_commands, daemon=True).start()
 

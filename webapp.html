@@ -358,7 +358,7 @@
         <span data-i18n="cam_title">📷 Камера принтера</span>
         <div class="title-actions">
           <button class="btn btn-sm" data-i18n="light_btn">💡 Свет</button>
-          <button class="btn btn-sm" onclick="refreshCam()" data-i18n="reload_btn">Reload</button>
+          <button class="btn btn-sm" onclick="refreshCam()" data-i18n="reload_btn" title="Refresh">🔄</button>
         </div>
       </div>
       <div class="cam-wrap">
@@ -477,6 +477,7 @@
       <div style="font-size:12px;color:#8b95a5;margin-bottom:10px" data-i18n="update_desc">Проверка новых версий из репозитория GitHub</div>
       <button class="btn btn-primary" style="width:100%" onclick="checkUpdate()" data-i18n="update_check">🔄 Проверить</button>
       <button class="btn" style="width:100%;margin-top:8px;display:none" id="btn-install" onclick="installUpdate()" data-i18n="update_install">⬇️ Установить</button>
+      <div id="update-status" style="font-size:12px;color:#8b95a5;margin-top:8px;display:none"></div>
     </div>
 
     <div class="card">
@@ -599,7 +600,12 @@
         "tab_settings": "Настройки",
         "cam_title": "📷 Камера принтера",
         "light_btn": "💡 Свет",
-        "reload_btn": "Reload",
+        "reload_btn": "🔄 Обновить",
+        "update_progress": "Обновление: %s",
+        "update_started": "Обновление запущено, скачиваю файлы...",
+        "update_restarting": "Бот перезапускается...",
+        "update_failed": "Ошибка обновления",
+        "update_done_short": "✅ Версия %s",
         "nozzle_label": "🌡 Сопло",
         "bed_label": "🛏 Стол",
         "loading": "⏳ Загрузка...",
@@ -699,7 +705,12 @@
         "tab_settings": "Settings",
         "cam_title": "📷 Printer camera",
         "light_btn": "💡 Light",
-        "reload_btn": "Reload",
+        "reload_btn": "🔄 Refresh",
+        "update_progress": "Updating: %s",
+        "update_started": "Update started, downloading files...",
+        "update_restarting": "Bot is restarting...",
+        "update_failed": "Update failed",
+        "update_done_short": "✅ Version %s",
         "nozzle_label": "🌡 Nozzle",
         "bed_label": "🛏 Bed",
         "loading": "⏳ Loading...",
@@ -1285,8 +1296,47 @@
     }
 
     function installUpdate() {
+      const btn = document.getElementById('btn-install');
+      const status = document.getElementById('update-status');
+      if (btn) btn.disabled = true;
+      if (status) {
+        status.style.display = 'block';
+        status.textContent = t('update_started');
+      }
       apiPost('/api/update/apply', {}).then(r => {
-        if (tg && tg.showAlert) tg.showAlert(t('update_installing'));
+        if (r && r.ok === false) throw new Error(r.error || 'error');
+        if (tg && tg.showAlert) tg.showAlert(t('update_started'));
+        setTimeout(() => pollUpdateStatus(1), 1500);
+      }).catch(() => {
+        if (btn) btn.disabled = false;
+        if (status) status.textContent = t('update_failed');
+        if (tg && tg.showAlert) tg.showAlert(t('update_failed'));
+      });
+    }
+
+    function pollUpdateStatus(attempt) {
+      const status = document.getElementById('update-status');
+      const btn = document.getElementById('btn-install');
+      apiGet('/api/update/status').then(r => {
+        if (r && r.running) {
+          if (status) status.textContent = t('update_progress').replace('%s', r.stage || '');
+          setTimeout(() => pollUpdateStatus(attempt + 1), 2000);
+          return;
+        }
+        if (r && r.stage === 'failed') {
+          if (btn) btn.disabled = false;
+          if (status) status.textContent = t('update_failed');
+          return;
+        }
+        if (attempt <= 2) {
+          setTimeout(() => pollUpdateStatus(attempt + 1), 2000);
+          return;
+        }
+        if (status) status.textContent = t('update_done_short').replace('%s', (r && r.current_version) || '');
+      }).catch(() => {
+        // Бот перезапускается: соединение пропало — это ожидаемо.
+        if (status) status.textContent = t('update_restarting');
+        if (attempt < 40) setTimeout(() => pollUpdateStatus(attempt + 1), 2000);
       });
     }
 
