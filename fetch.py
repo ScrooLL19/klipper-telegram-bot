@@ -16,12 +16,37 @@ import time
 import urllib.request
 
 UA = "klipper-tg-bot-fetch/1.0"
+CHUNK = 65536
+BAR_WIDTH = 20
+NAME_WIDTH = 26
 
 
 def _ssl_context():
     """Контекст с проверкой сертификата; понятная ошибка, если CA нет.
     Verifying TLS context with a readable error when CA certs are missing."""
     return ssl.create_default_context()
+
+
+def _fmt_mb(value):
+    return value / 1048576.0
+
+
+def _progress(done, total, started, label):
+    """Рисует прогресс-бар в одной строке.
+    Renders an in-place progress bar."""
+    elapsed = max(0.001, time.time() - started)
+    speed = _fmt_mb(done) / elapsed
+    name = os.path.basename(label)[:NAME_WIDTH]
+    if total and total > 0:
+        pct = min(100, int(done * 100 / total))
+        filled = pct * BAR_WIDTH // 100
+        bar = "#" * filled + "-" * (BAR_WIDTH - filled)
+        line = "   [%s] %3d%%  %6.1f/%6.1f MB  %5.1f MB/s  %s" % (
+            bar, pct, _fmt_mb(done), _fmt_mb(total), speed, name)
+    else:
+        line = "   %8.1f MB  %5.1f MB/s  %s" % (_fmt_mb(done), speed, name)
+    sys.stdout.write("\r" + line[:100])
+    sys.stdout.flush()
 
 
 def http_get(url, timeout=45, retries=3):
@@ -46,24 +71,70 @@ def sha256_hex(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def download(url, dest, digest=None, size=None):
-    """Скачивает файл, сверяет размер и sha256, пишет атомарно.
-    Downloads a file, verifies size and sha256, writes it atomically."""
-    data = http_get(url)
-    if size and len(data) != size:
-        raise RuntimeError("size mismatch for %s: %d != %d" % (dest, len(data), size))
-    if digest and sha256_hex(data) != digest:
-        raise RuntimeError("sha256 mismatch for %s" % dest)
-    # Скрипты для OpenWrt должны быть с LF / shell scripts must use LF on OpenWrt.
-    if dest.endswith(".sh"):
-        data = data.replace(b"\r\n", b"\n")
-    tmp = dest + ".part"
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, dest)
-    return len(data)
+def _normalize_script(path):
+    """Приводит .sh к LF — иначе OpenWrt ругается на CRLF.
+    Converts .sh files to LF, otherwise OpenWrt fails on CRLF."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if b"\r\n" in data:
+        with open(path, "wb") as f:
+            f.write(data.replace(b"\r\n", b"\n"))
+
+
+def download(url, dest, digest=None, size=None, timeout=45, retries=3):
+    """Скачивает потоком с прогресс-баром, сверяет размер и sha256.
+    Streams the file with a progress bar and verifies size and sha256."""
+    last = None
+    for attempt in range(retries):
+        tmp = dest + ".part"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+                total = int(resp.headers.get("Content-Length") or 0) or int(size or 0)
+                hasher = hashlib.sha256()
+                done = 0
+                started = time.time()
+                with open(tmp, "wb") as f:
+                    while True:
+                        chunk = resp.read(CHUNK)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        hasher.update(chunk)
+                        done += len(chunk)
+                        _progress(done, total, started, dest)
+                    f.flush()
+                    os.fsync(f.fileno())
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            if size and done != size:
+                raise RuntimeError("size mismatch for %s: %d != %d" % (dest, done, size))
+            if digest and hasher.hexdigest() != digest:
+                raise RuntimeError("sha256 mismatch for %s" % dest)
+            os.replace(tmp, dest)
+            if dest.endswith(".sh"):
+                _normalize_script(dest)
+            return done
+        except Exception as exc:  # noqa: BLE001 - повторяем любой сетевой сбой
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            last = exc
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                raise RuntimeError(
+                    "нет CA-сертификатов / no CA bundle, выполните: opkg install ca-bundle")
+            if "mismatch" in str(exc):
+                # Битый файл не лечится повтором — сразу на другое зеркало.
+                # A corrupted file will not fix itself: fail fast for the next mirror.
+                break
+            if attempt < retries - 1:
+                sys.stdout.write("   retry %d/%d: %s\n" % (attempt + 2, retries, exc))
+                sys.stdout.flush()
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError("download failed: %s (%s)" % (url, last))
 
 
 def _safe_name(name):
@@ -84,16 +155,16 @@ def fetch_manifest(manifest_url, dest_dir):
     if not version or not isinstance(files, dict) or not files:
         raise RuntimeError("bad manifest")
     base = manifest_url.rsplit("/", 1)[0]
-    total = 0
+    total_bytes = 0
     for name, meta in files.items():
         safe = _safe_name(name)
         meta = meta or {}
         url = "%s/%s?v=%s" % (base, safe, version)
         written = download(url, os.path.join(dest_dir, safe),
                            meta.get("sha256"), meta.get("size"))
-        print("   OK %-24s %8d bytes" % (safe, written))
-        total += written
-    return version, len(files), total
+        total_bytes += written
+        print("   OK %-24s %8d bytes, sha256 verified" % (safe, written))
+    return version, len(files), total_bytes
 
 
 def main(argv):

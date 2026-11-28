@@ -95,8 +95,22 @@ if [ -w /etc/resolv.conf ] && ! grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null; 
 fi
 
 # ---------- 4. Каталог и восстановление данных / dir and restore ----------
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
+[ -n "$INSTALL_DIR" ] || INSTALL_DIR="/root/printer_tg_bot"
+if ! mkdir -p "$INSTALL_DIR"; then
+  say "ERROR: не удалось создать каталог / cannot create $INSTALL_DIR"
+  exit 1
+fi
+if ! cd "$INSTALL_DIR"; then
+  say "ERROR: не удалось перейти в каталог / cannot enter $INSTALL_DIR"
+  exit 1
+fi
+# Склеивать пути внутри heredoc нельзя: ошибка в переменной даёт битый
+# ExecStart. Собираем один раз и дальше используем только $ENTRY / $FETCH.
+# Never concatenate paths inside a heredoc: one bad variable breaks ExecStart.
+ENTRY="$INSTALL_DIR/printer_tg_bot.py"
+FETCH="$INSTALL_DIR/fetch.py"
+say "-> Install dir:  $INSTALL_DIR"
+say "-> Entry point:  $ENTRY"
 
 if [ -f "$BACKUP_FILE" ] && [ ! -f "$INSTALL_DIR/printer_state.json" ]; then
   say "-> Found previous backup, restoring spool data..."
@@ -116,7 +130,7 @@ data = urllib.request.urlopen(req, timeout=30).read()
 if b'def download' not in data:
     raise SystemExit('unexpected fetch.py content')
 open(dst, 'wb').write(data)
-" "$BASE/fetch.py" "$INSTALL_DIR/fetch.py"; then
+" "$BASE/fetch.py" "$FETCH"; then
     BOOT_OK=1
     break
   fi
@@ -128,7 +142,7 @@ fi
 
 FETCH_OK=0
 for BASE in "$REPO_RAW" "$REPO_MIRROR"; do
-  if "$PY" "$INSTALL_DIR/fetch.py" --manifest "$BASE/manifest.json" "$INSTALL_DIR"; then
+  if "$PY" "$FETCH" --manifest "$BASE/manifest.json" "$INSTALL_DIR"; then
     FETCH_OK=1
     break
   fi
@@ -139,18 +153,32 @@ if [ "$FETCH_OK" -ne 1 ]; then
 fi
 
 if [ ! -f uninstall.sh ]; then
-  "$PY" "$INSTALL_DIR/fetch.py" "$REPO_RAW/uninstall.sh" "$INSTALL_DIR/uninstall.sh" || \
-    "$PY" "$INSTALL_DIR/fetch.py" "$REPO_MIRROR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+  "$PY" "$FETCH" "$REPO_RAW/uninstall.sh" "$INSTALL_DIR/uninstall.sh" || \
+    "$PY" "$FETCH" "$REPO_MIRROR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
 fi
 
 # config.ini никогда не перезаписываем — в нём настройки пользователя.
 # config.ini is never overwritten: it holds user settings.
 if [ ! -f config.ini ]; then
-  "$PY" "$INSTALL_DIR/fetch.py" "$REPO_RAW/config.ini" "$INSTALL_DIR/config.ini" || \
-    "$PY" "$INSTALL_DIR/fetch.py" "$REPO_MIRROR/config.ini" "$INSTALL_DIR/config.ini"
+  "$PY" "$FETCH" "$REPO_RAW/config.ini" "$INSTALL_DIR/config.ini" || \
+    "$PY" "$FETCH" "$REPO_MIRROR/config.ini" "$INSTALL_DIR/config.ini"
 fi
 
-chmod +x printer_tg_bot.py fetch.py uninstall.sh
+chmod +x "$ENTRY" "$FETCH" 2>/dev/null || true
+[ -f "$INSTALL_DIR/uninstall.sh" ] && chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
+
+# ---------- 5a. Проверка целостности установки / installation self-check ----------
+for need in "$ENTRY" "$INSTALL_DIR/webapp.html"; do
+  if [ ! -s "$need" ]; then
+    say "ERROR: файл не установлен / missing or empty: $need"
+    exit 1
+  fi
+done
+if ! "$PY" -c "import ast, io, sys; ast.parse(io.open(sys.argv[1], encoding='utf-8').read())" "$ENTRY"; then
+  say "ERROR: printer_tg_bot.py повреждён / backend file is corrupted"
+  exit 1
+fi
+say "-> Files verified in $INSTALL_DIR"
 
 # ---------- 6. secrets.ini ----------
 if [ ! -f secrets.ini ]; then
@@ -195,8 +223,8 @@ case "$USE_CF" in
       CF_ARCH="$("$PY" -c "import platform; m = platform.machine().lower(); print('arm64' if m in ('aarch64', 'arm64') else 'amd64' if m in ('x86_64', 'amd64') else 'arm')")"
       CF_NAME="cloudflared-linux-$CF_ARCH"
       say "-> Downloading cloudflared ($CF_ARCH)..."
-      if "$PY" "$INSTALL_DIR/fetch.py" "https://github.com/cloudflare/cloudflared/releases/latest/download/$CF_NAME" "$INSTALL_DIR/cloudflared" || \
-         "$PY" "$INSTALL_DIR/fetch.py" "https://cdn.jsdelivr.net/gh/cloudflare/cloudflared@latest/releases/latest/download/$CF_NAME" "$INSTALL_DIR/cloudflared"; then
+      if "$PY" "$FETCH" "https://github.com/cloudflare/cloudflared/releases/latest/download/$CF_NAME" "$INSTALL_DIR/cloudflared" || \
+         "$PY" "$FETCH" "https://cdn.jsdelivr.net/gh/cloudflare/cloudflared@latest/releases/latest/download/$CF_NAME" "$INSTALL_DIR/cloudflared"; then
         chmod +x cloudflared
       else
         say "WARN: cloudflared не скачан — Mini App будет доступен только в локальной сети"
@@ -215,7 +243,7 @@ STOP=10
 USE_PROCD=1
 start_service() {
   procd_open_instance
-  procd_set_param command $PY $INSTALL_DIR/printer_tg_bot.py
+  procd_set_param command "$PY" "$ENTRY"
   procd_set_param respawn 3600 5 0
   procd_set_param stdout 1
   procd_set_param stderr 1
@@ -223,6 +251,7 @@ start_service() {
 }
 EOF
   chmod +x /etc/init.d/printer_tg_bot
+  say "-> Service command: $PY $ENTRY"
   /etc/init.d/printer_tg_bot enable
   /etc/init.d/printer_tg_bot restart
 elif command -v systemctl >/dev/null 2>&1; then
@@ -235,19 +264,20 @@ After=network-online.target moonraker.service
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$PY $INSTALL_DIR/printer_tg_bot.py
+ExecStart=$PY "$ENTRY"
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
+  say "-> Service command: $PY $ENTRY"
   systemctl daemon-reload
   systemctl enable printer_tg_bot
   systemctl restart printer_tg_bot
 else
   say "-> Starting in background..."
-  nohup "$PY" "$INSTALL_DIR/printer_tg_bot.py" >/dev/null 2>&1 &
+  nohup "$PY" "$ENTRY" >/dev/null 2>&1 &
 fi
 
 rm -f /tmp/install.sh

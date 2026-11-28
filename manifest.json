@@ -1,10 +1,10 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "min_version": "1.0.0",
   "files": {
     "printer_tg_bot.py": {
-      "sha256": "2cf45d4541941e72bd26c11e31568902891e3de944f273f337af18b2d48c719c",
-      "size": 144766
+      "sha256": "239f9127532d09076c5c39d50a758b16174df8df0211bef80a348d4040e7094b",
+      "size": 146443
     },
     "webapp.html": {
       "sha256": "0fda12f27f99ced7bdcb705a11f598bc976d612491c5e6c57f4f5516fe29f7db",

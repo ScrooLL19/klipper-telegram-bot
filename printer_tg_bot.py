@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -277,6 +277,12 @@ LANG = {
         "webapp_panel": "📱 Панель",
         "language_ru": "🇷🇺 Русский",
         "language_en": "🇬🇧 English",
+        "print_time": "• Время печати: <b>%s</b>",
+        "actual_cost": "💰 <b>Фактическая стоимость:</b>",
+        "reason_none": "не указана",
+        "days_short": "Пн,Вт,Ср,Чт,Пт,Сб,Вс",
+        "dur_hm": "%d ч %d мин",
+        "dur_m": "%d мин",
     },
     "en": {
         "menu_status": "📊 Status",
@@ -439,6 +445,12 @@ LANG = {
         "webapp_panel": "📱 Panel",
         "language_ru": "🇷🇺 Русский",
         "language_en": "🇬🇧 English",
+        "print_time": "• Print time: <b>%s</b>",
+        "actual_cost": "💰 <b>Actual cost:</b>",
+        "reason_none": "not specified",
+        "days_short": "Mon,Tue,Wed,Thu,Fri,Sat,Sun",
+        "dur_hm": "%d h %d min",
+        "dur_m": "%d min",
     }
 }
 
@@ -468,8 +480,36 @@ def get_language():
 
 _last_kb_lang = [None]
 
+_missing_keys = set()
+
+
+def _i18n_selfcheck():
+    """Проверяет паритет ключей ru/en и пишет расхождения в лог.
+    Verifies ru/en key parity and logs the differences."""
+    ru_keys, en_keys = set(LANG.get("ru", {})), set(LANG.get("en", {}))
+    for key in sorted(ru_keys - en_keys):
+        log.warning("i18n: нет перевода EN / missing EN key: %s", key)
+    for key in sorted(en_keys - ru_keys):
+        log.warning("i18n: нет перевода RU / missing RU key: %s", key)
+    return not (ru_keys ^ en_keys)
+
+
+def plural(count, one, few, many):
+    """Русская плюрализация; для EN используются формы one/many.
+    Russian pluralization; EN falls back to the one/many forms."""
+    n = abs(int(count))
+    if get_language() == "en":
+        return t(one) if n == 1 else t(many)
+    if n % 10 == 1 and n % 100 != 11:
+        return t(one)
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return t(few)
+    return t(many)
+
+
 def t(key, *args):
-    """Перевод строки. Если ключа нет — возвращает русский текст как fallback."""
+    """Перевод: текущий язык -> EN -> ключ (с записью пропуска в лог).
+    Lookup order: current language -> EN -> key (missing keys are logged)."""
     lang = get_language()
     if lang != _last_kb_lang[0]:
         _last_kb_lang[0] = lang
@@ -481,7 +521,15 @@ def t(key, *args):
             RESET_KB = get_reset_kb()
         except Exception:
             pass
-    text = LANG.get(lang, LANG["ru"]).get(key, LANG["ru"].get(key, key))
+    table = LANG.get(lang) or LANG.get("en") or {}
+    text = table.get(key)
+    if text is None:
+        text = LANG.get("en", {}).get(key)
+    if text is None:
+        if key not in _missing_keys:
+            _missing_keys.add(key)
+            log.warning("i18n: нет ключа / missing key: %s", key)
+        return key
     if args:
         try:
             return text % args
@@ -570,6 +618,7 @@ log.setLevel(logging.INFO)
 _handler = RotatingFileHandler(os.path.join(BASE_DIR, "printer_tg_bot.log"), maxBytes=5*1024*1024, backupCount=3)
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 log.addHandler(_handler)
+_i18n_selfcheck()
 
 # Источники обновлений: raw первым (свежий), jsDelivr как fallback (доступность).
 # Update sources: raw first (fresh), jsDelivr as fallback (reachability).
@@ -1009,9 +1058,26 @@ def _nearest_palette(raw_hex):
             best_d, best = d, (exact_name, grp_name)
     return best
 
+COLOR_EN = {
+    "Светло-желтый": "Light yellow", "Желтый": "Yellow", "Коралловый": "Coral",
+    "Розовый": "Pink", "Синий": "Blue", "Салатовый": "Lime", "Оранжевый": "Orange",
+    "Красный": "Red", "Белый": "White", "Серый": "Grey", "Фиолетовый": "Purple",
+    "Голубой": "Light blue", "Бирюзовый": "Turquoise", "Светло-розовый": "Light pink",
+    "Темно-синий": "Dark blue", "Черный": "Black", "Зеленый": "Green",
+    "Сиреневый": "Lilac", "Серебряный": "Silver", "Коричневый": "Brown",
+    "Прозрачный": "Clear", "Неизвестный": "Unknown",
+}
+
+
 def hex_to_ru_name(raw_hex):
+    """Название цвета по hex на языке пользователя (внутри — канонический RU).
+    Colour name for a hex value, localized for display; canonical RU is kept
+    internally for grouping and matching."""
     res = _nearest_palette(raw_hex)
-    return list(res).pop(0) if res else "Неизвестный"
+    name = list(res).pop(0) if res else "Неизвестный"
+    if get_language() == "en":
+        return COLOR_EN.get(name, name)
+    return name
 
 def normalize_color_group(text_or_hex):
     s = str(text_or_hex or "").strip().lower()
@@ -1480,14 +1546,15 @@ def process_completed_job(fname, meta, print_dur, used_mm, send_video=True):
     changes = meta.get("filament_change_count", 0) or 0
     final_cut = 1 if (HAS_CFS and used_mm > 0) else 0
     update_counters(changes + final_cut)
-    lines = ["🏁 <b>Печать завершена:</b>", "• Файл: <b>%s</b>" % esc(fname), "• Время печати: <b>%s</b>" % format_dur(print_dur)]
+    lines = [t("print_completed"), t("file", esc(fname)), t("print_time", format_dur(print_dur))]
     if w > 0:
-        lines.append("• Расход пластика: <b>%.1f г</b>%s" % (w, " (промывка CFS: ~%.1f г)" % flush_g if flush_g > 0.1 else ""))
+        flush_txt = t("cfs_flush", flush_g) if flush_g > 0.1 else ""
+        lines.append(t("filament_used", w) + flush_txt)
     if spool_notes: lines.append(spool_notes)
     if direct > 0:
-        lines.extend(["", "💰 <b>Фактическая стоимость:</b>",
-            "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)" % (direct, elec),
-            "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)" % (full, depr)])
+        lines.extend(["", t("actual_cost"),
+            t("cost_direct", direct, elec),
+            t("cost_depr", full, depr)])
     totals = get_history_totals()
     if totals: lines.extend(["", format_consumables()])
     if send_video:
@@ -1514,11 +1581,11 @@ def handle_missed_job_end(old_fname):
         record_waste(w, direct)
         spool_notes = deduct_spool_weight(old_fname, meta, w)
         update_counters(0)
-        lines = ["⏹ <b>Пропущенное завершение печати (статус: %s):</b>" % esc(status or "unknown"),
-            "• Файл: <b>%s</b>" % esc(old_fname),
-            "• Время печати: <b>%s</b>" % format_dur(dur)]
+        lines = [t("missed_end", esc(status or t("unknown"))),
+            t("file", esc(old_fname)),
+            t("print_time", format_dur(dur))]
         if w > 0:
-            lines.append("• Расход пластика: <b>%.1f г</b>" % w)
+            lines.append(t("filament_used", w))
         if spool_notes:
             lines.extend(["", spool_notes])
         tg_send("\n".join(lines), MAIN_KB)
@@ -1527,8 +1594,10 @@ def handle_missed_job_end(old_fname):
 
 # ==================== 9. СТАТУС И ОБСЛУЖИВАНИЕ ====================
 def format_dur(sec):
+    """Длительность на языке пользователя.
+    Human-readable duration in the user's language."""
     h, m = int(sec // 3600), int((sec % 3600) // 60)
-    return "%d ч %d мин" % (h, m) if h > 0 else "%d мин" % m
+    return t("dur_hm", h, m) if h > 0 else t("dur_m", m)
 
 def format_status():
     st = get_print_stats()
@@ -1572,16 +1641,16 @@ def do_reset(target):
     def _apply(st):
         if target == "nozzle":
             st["nozzle_start_meters"], st["nozzle_warned"] = meters, False
-            result["msg"] = "✅ Счетчик сопла сброшен (%.1f м)" % meters
+            result["msg"] = t("reset_nozzle", meters)
         elif target == "filter":
             st["filter_start_hours"], st["filter_warned"] = hours, False
-            result["msg"] = "✅ Счетчик фильтра сброшен (%.1f ч)" % hours
+            result["msg"] = t("reset_filter", hours)
         elif target == "ptfe":
             st["ptfe_start_meters"], st["ptfe_warned"] = meters, False
-            result["msg"] = "✅ Счетчик PTFE сброшен (%.1f м)" % meters
+            result["msg"] = t("reset_ptfe", meters)
         else:
             st["cutter_cuts"], st["cutter_warned"] = 0, False
-            result["msg"] = "✅ Счетчик ножа сброшен (0 резов)"
+            result["msg"] = t("reset_cutter")
 
     mutate_state(_apply)
     return result["msg"]
@@ -1841,7 +1910,7 @@ def _get_cached_stats():
     tz = int(cfg("timezone_offset"))
     now_local = datetime.now(timezone.utc) + timedelta(hours=tz)
     days_labels, days_hours = [], []
-    day_names = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    day_names = tuple(t("days_short").split(","))
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     for shift in range(6, -1, -1):
         d_dt = now_local - timedelta(days=shift)
@@ -2746,8 +2815,8 @@ if migrate_state(_st):
     save_state(_st)
     log.info("Состояние мигрировано на новую схему")
 
-mode_str = "CFS (4 слота)" if HAS_CFS else "Одиночная катушка"
-tg_send("✅ <b>Мониторинг принтера запущен (v%s)</b>\nРежим: <b>%s</b>" % (VERSION, mode_str), WELCOME_KB)
+mode_str = t("mode_cfs") if HAS_CFS else t("mode_single")
+tg_send(t("bot_started", VERSION, mode_str), WELCOME_KB)
 
 threading.Thread(target=check_commands, daemon=True).start()
 
@@ -2773,12 +2842,13 @@ while True:
                 print_start_files = set(f for f in os.listdir(TIMELAPSE_DIR) if f.endswith(".mp4"))
             meta = get_file_meta(fname); est = meta.get("estimated_time", 0) or 0
             w, direct, full, elec, depr = calc_costs(meta, est); flush_g = get_flush_weight(meta)
-            lines = ["🖨 <b>Начало печати:</b>", "• Файл: <b>%s</b>" % esc(fname)]
+            lines = [t("print_started"), t("file", esc(fname))]
             if est > 0:
                 end_dt = (datetime.now(timezone.utc) + timedelta(hours=int(cfg("timezone_offset")), seconds=est)).strftime("%d.%m.%Y %H:%M")
-                lines.extend(["• Длительность: <b>~%s</b>" % format_dur(est), "• Окончание: <b>~%s</b>" % end_dt])
+                lines.extend([t("duration", format_dur(est)), t("eta", end_dt)])
             if w > 0:
-                lines.append("• Расход пластика: <b>~%.1f г</b>%s" % (w, " (промывка CFS: ~%.1f г)" % flush_g if flush_g > 0.1 else ""))
+                flush_txt = t("cfs_flush", flush_g) if flush_g > 0.1 else ""
+                lines.append(t("filament_used", w) + flush_txt)
             extra_btns = []
             if cfg("spool_tracking"):
                 slots, active_let, _, _ = get_cfs_slots()
@@ -2798,22 +2868,27 @@ while True:
                 mutate_state(_resolve_slots)
                 for let, part_g, title, rem_g in spool_rows:
                     if let == "SINGLE":
-                        lines.append("• Катушка: <b>%s</b> (в наличии %.0f г)" % (esc(title), rem_g))
-                        extra_btns.append([{"text": "🔄 Сменить катушку", "callback_data": "sp_ovslot_SINGLE"}])
+                        lines.append(t("spool", esc(title), rem_g))
+                        extra_btns.append([{"text": t("change_spool"), "callback_data": "sp_ovslot_SINGLE"}])
                     else:
-                        w_part_str = "нужно ~%.1f г | " % part_g if len(used_items) > 1 and part_g > 0 else ""
-                        lines.append("• Слот %s: <b>%s</b> (%sв наличии %.0f г)" % (let, esc(title), w_part_str, rem_g))
-                        extra_btns.append([{"text": "🔄 Сменить (Слот %s)" % let, "callback_data": "sp_ovslot_%s" % let}])
+                        need = t("slot_need", part_g) if len(used_items) > 1 and part_g > 0 else ""
+                        lines.append(t("slot", let, esc(title), need, rem_g))
+                        extra_btns.append([{"text": t("change_slot", let), "callback_data": "sp_ovslot_%s" % let}])
                     if part_g > 0 and rem_g < part_g:
-                        lines.append("⚠️ <i>Внимание: не хватит ~%.0f г до конца детали!</i>" % (part_g - rem_g))
+                        lines.append(t("low_filament", part_g - rem_g))
             if direct > 0:
-                lines.extend(["", "💰 <b>Расчетная стоимость:</b>",
-                    "• Прямые (пластик+свет): <b>~%.1f руб.</b> (свет ~%.1f руб.)" % (direct, elec),
-                    "• С амортизацией: <b>~%.1f руб.</b> (аморт. ~%.1f руб.)" % (full, depr)])
+                lines.extend(["", t("cost_title"),
+                    t("cost_direct", direct, elec),
+                    t("cost_depr", full, depr)])
             start_kb = {"inline_keyboard": MAIN_KB["inline_keyboard"] + extra_btns} if extra_btns else MAIN_KB
             send_thumbnail(meta, "\n".join(lines), start_kb)
         elif state == "paused" and last_state != "paused":
-            p_msg = "⚠️ <b>Кончился филамент!</b>\nПечать на паузе.\n• Файл: <b>%s</b>" % esc(fname) if ("filament" in msg.lower() or "out of" in msg.lower()) else "⏸ <b>Печать на паузе</b>\n• Причина: %s\n• Файл: <b>%s</b>" % (esc(msg or "не указана"), esc(fname))
+            if "filament" in msg.lower() or "out of" in msg.lower():
+                p_msg = "%s\n%s" % (t("filament_out"), t("file", esc(fname)))
+            else:
+                p_msg = "%s\n%s\n%s" % (t("print_paused"),
+                                         t("reason", esc(msg or t("reason_none"))),
+                                         t("file", esc(fname)))
             send_usb_photo(p_msg, MAIN_KB)
         elif state == "complete" and last_state != "complete":
             process_completed_job(fname, get_file_meta(fname), print_dur, used_mm, send_video=True)
@@ -2821,13 +2896,14 @@ while True:
             meta = get_file_meta(fname); record_material_usage(meta, used_mm, fname)
             w, direct, full, _, depr = calc_costs(meta, print_dur, used_mm); record_waste(w, direct)
             spool_notes = deduct_spool_weight(fname, meta, w)
-            lines = ["❌ <b>Ошибка печати:</b>" if state == "error" else "⏹ <b>Печать остановлена/отменена:</b>"]
-            if state == "error" and msg: lines.append("• Причина: %s" % esc(msg))
-            lines.append("• Файл: <b>%s</b>" % esc(fname))
+            lines = [t("print_error") if state == "error" else t("print_cancelled")]
+            if state == "error" and msg:
+                lines.append(t("reason", esc(msg)))
+            lines.append(t("file", esc(fname)))
             if w > 0.5 or direct > 0.5:
-                lines.extend(["", "🗑 <b>Потери на брак:</b>",
-                    "• Пластик: <b>%.1f г</b>" % w,
-                    "• Прямые затраты: <b>~%.1f руб.</b> (с аморт. ~%.1f руб.)" % (direct, full)])
+                lines.extend(["", t("waste_title"),
+                    t("waste_filament", w),
+                    t("waste_cost", direct, full)])
             if spool_notes: lines.extend(["", spool_notes])
             out_txt = "\n".join(lines)
             if state == "error": send_usb_photo(out_txt, MAIN_KB)

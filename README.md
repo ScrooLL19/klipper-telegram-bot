@@ -43,6 +43,31 @@ To completely remove the bot, Mini App, and background service without affecting
 ```
 sh /root/printer_tg_bot/uninstall.sh
 ```
+
+### 🩺 Troubleshooting: autostart points to a wrong path / автозапуск с неверным путём
+
+If the service reports `can't open file '/root/printer_tg_bot.py'`, the init script was generated with a wrong path. Re-running the installer fixes it, or patch the service manually / перезапуск установщика исправляет это, либо поправьте службу вручную:
+
+```
+cat > /etc/init.d/printer_tg_bot <<'EOF'
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/bin/python3 /root/printer_tg_bot/printer_tg_bot.py
+  procd_set_param respawn 3600 5 0
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+EOF
+chmod +x /etc/init.d/printer_tg_bot
+/etc/init.d/printer_tg_bot enable
+/etc/init.d/printer_tg_bot restart
+```
+
 ---
 
 ## 🇷🇺 Русский
