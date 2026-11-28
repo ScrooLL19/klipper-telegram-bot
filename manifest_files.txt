@@ -1,0 +1,6 @@
+# Файлы, которые OTA скачивает и обновляет. Один список для gen_manifest.py,
+# install.sh и fetch.py — правьте только здесь.
+# Files distributed and updated by OTA. A single list for gen_manifest.py,
+# install.sh and fetch.py — edit only here.
+printer_tg_bot.py
+webapp.html

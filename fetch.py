@@ -10,6 +10,7 @@ Pure-Python downloader: no curl/wget required on the printer.
 import hashlib
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -94,6 +95,7 @@ def download(url, dest, digest=None, size=None, timeout=45, retries=3):
                 hasher = hashlib.sha256()
                 done = 0
                 started = time.time()
+                os.makedirs(os.path.dirname(tmp) or ".", exist_ok=True)
                 with open(tmp, "wb") as f:
                     while True:
                         chunk = resp.read(CHUNK)
@@ -138,11 +140,16 @@ def download(url, dest, digest=None, size=None, timeout=45, retries=3):
 
 
 def _safe_name(name):
-    name = str(name or "").strip()
-    if (not name or name.startswith((".", "/", "\\"))
-            or "/" in name or "\\" in name or ".." in name):
+    """Разрешает относительные пути, включая подкаталоги (core/state.py).
+    Allows relative paths, subdirectories included (core/state.py)."""
+    raw = str(name or "").strip().replace("\\", "/")
+    parts = raw.split("/")
+    if not raw or raw.startswith("/") or len(parts) > 4 or any(not p for p in parts):
         raise RuntimeError("unsafe file name: %r" % name)
-    return name
+    for part in parts:
+        if part.startswith(".") or not re.match(r"^[A-Za-z0-9_.-]+$", part):
+            raise RuntimeError("unsafe file name: %r" % name)
+    return "/".join(parts)
 
 
 def fetch_manifest(manifest_url, dest_dir):

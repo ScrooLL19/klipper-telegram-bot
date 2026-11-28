@@ -11,7 +11,7 @@ try:
 except ImportError:  # Windows: блокировка второго экземпляра недоступна / no flock on Windows
     fcntl = None
 
-VERSION = "1.5.0"
+VERSION = "1.7.0"
 
 # ==================== STATE CACHE / КЭШ СОСТОЯНИЯ ====================
 # Единственный безопасный способ изменить состояние — mutate_state().
@@ -295,6 +295,19 @@ LANG = {
         "stats_unavailable": "⚠️ Не удалось получить статистику.",
         "slot_button": "Слот %s (%s)",
         "error_short": "❌ Ошибка",
+        # Pre-flight (проверка перед печатью)
+        "preflight_title": "⚠️ <b>Проверка перед печатью</b>",
+        "preflight_low_filament": "• Слот %s: не хватает <b>%.0f г</b> (остаток %.0f г).",
+        "preflight_stock_yes": "На складе есть катушка #%d — %.0f г.",
+        "preflight_stock_no": "Подходящей катушки на складе нет.",
+        "preflight_wrong_mat": "• Слот %s: G-code требует <b>%s</b>, в слоте <b>%s</b>.",
+        "preflight_maint": "• %s: осталось <b>%.1f ч</b>, задание ~%.1f ч.",
+        "preflight_maint_m": "• %s: осталось <b>%.1f м</b>, задание ~%.1f м.",
+        "preflight_item_maint": "Плановое ТО",
+        "preflight_item_nozzle": "Сопло",
+        "preflight_item_filter": "Фильтр",
+        "preflight_item_ptfe": "PTFE-трубка",
+        "preflight_note": "<i>Печать не остановлена — это предупреждение.</i>",
     },
     "en": {
         "menu_status": "📊 Status",
@@ -475,6 +488,19 @@ LANG = {
         "stats_unavailable": "⚠️ Failed to read statistics.",
         "slot_button": "Slot %s (%s)",
         "error_short": "❌ Error",
+        # Pre-flight checks
+        "preflight_title": "⚠️ <b>Pre-flight check</b>",
+        "preflight_low_filament": "• Slot %s: <b>%.0f g</b> short (%.0f g left).",
+        "preflight_stock_yes": "In stock: spool #%d — %.0f g.",
+        "preflight_stock_no": "No suitable spool in stock.",
+        "preflight_wrong_mat": "• Slot %s: G-code expects <b>%s</b>, slot has <b>%s</b>.",
+        "preflight_maint": "• %s: <b>%.1f h</b> left, job ~%.1f h.",
+        "preflight_maint_m": "• %s: <b>%.1f m</b> left, job ~%.1f m.",
+        "preflight_item_maint": "Scheduled maintenance",
+        "preflight_item_nozzle": "Nozzle",
+        "preflight_item_filter": "Filter",
+        "preflight_item_ptfe": "PTFE tube",
+        "preflight_note": "<i>The print was not stopped — this is a warning.</i>",
     }
 }
 
@@ -510,7 +536,11 @@ def _refresh_menu_button():
             "menu_button": json.dumps({
                 "type": "web_app",
                 "text": t("webapp_panel"),
-                "web_app": {"url": "%s/?key=%s" % (url, WEBAPP_SECRET)},
+                # Ключ не передаём в URL: он попадает в логи прокси и браузера.
+                # Панель авторизуется подписанным initData, ключ — только заголовком.
+                # The key is not put into the URL (it leaks into proxy/browser logs):
+                # the panel authenticates with signed initData, the key is header-only.
+                "web_app": {"url": "%s/" % url},
             }),
         })
         log.info("setChatMenuButton: %s", res)
@@ -628,6 +658,28 @@ MANIFEST_FILE = os.path.join(BASE_DIR, "manifest.json")
 PENDING_UPDATE_FILE = os.path.join(BASE_DIR, "pending_update.json")
 UPDATE_STAGING = os.path.join(BASE_DIR, "update_staging")
 UPDATE_BACKUP = os.path.join(BASE_DIR, "update_backup")
+
+# Сетевые таймауты в секундах — без магических чисел по коду.
+# Network timeouts in seconds — no magic numbers scattered around.
+TIMEOUT_TG = 15
+TIMEOUT_MOONRAKER = 8
+TIMEOUT_MOONRAKER_FAST = 4
+TIMEOUT_MOONRAKER_SLOW = 10
+TIMEOUT_METADATA = 5
+TIMEOUT_HISTORY_TOTALS = 5
+TIMEOUT_HISTORY_LIST = 8
+TIMEOUT_CAMERA = 5
+TIMEOUT_CAMERA_PROBE = 2
+TIMEOUT_THUMBNAIL = 10
+TIMEOUT_GCODE_LONG = 300
+TIMEOUT_OTA_VERSION = 10
+TIMEOUT_OTA_CODE = 25
+TIMEOUT_OTA_MANIFEST = 15
+TIMEOUT_OTA_DOWNLOAD = 60
+TIMEOUT_OTA_HTTP = 20
+TIMEOUT_TG_CALLBACK = 10
+TIMEOUT_TG_MEDIA = 30
+TIMEOUT_TG_LONG = 30
 
 if os.path.exists(SECRETS_FILE) or os.path.exists(CONFIG_FILE):
     config = configparser.ConfigParser()
@@ -759,7 +811,7 @@ MAINT_KB = get_maint_kb()
 RESET_KB = get_reset_kb()
 
 # ==================== 3. TELEGRAM API ====================
-def tg_api(method, payload, timeout=15):
+def tg_api(method, payload, timeout=TIMEOUT_TG):
     url = "https://api.telegram.org/bot%s/%s" % (TOKEN, method)
     if "reply_markup" in payload and payload["reply_markup"]:
         payload["reply_markup"] = json.dumps(payload["reply_markup"])
@@ -790,9 +842,9 @@ def tg_answer_cb(cb_id, text=""):
     if not cb_id: return
     p = {"callback_query_id": cb_id}
     if text: p["text"] = text
-    tg_api("answerCallbackQuery", p, timeout=10)
+    tg_api("answerCallbackQuery", p, timeout=TIMEOUT_TG_CALLBACK)
 
-def tg_send_media(is_video, file_bytes, filename, mime, caption, kb=None, timeout=30):
+def tg_send_media(is_video, file_bytes, filename, mime, caption, kb=None, timeout=TIMEOUT_TG_MEDIA):
     method = "sendVideo" if is_video else "sendPhoto"
     field = "video" if is_video else "photo"
     url = "https://api.telegram.org/bot%s/%s" % (TOKEN, method)
@@ -824,11 +876,9 @@ def esc(text):
 
 def send_usb_photo(caption, kb=None):
     global CAM_SNAPSHOT_URL, last_cam_fail_ts
-    if not CAM_SNAPSHOT_URL and time.time() - last_cam_fail_ts > 300:
-        detect_environment()
     if CAM_SNAPSHOT_URL:
         try:
-            with urllib.request.urlopen(CAM_SNAPSHOT_URL, timeout=5) as r:
+            with urllib.request.urlopen(CAM_SNAPSHOT_URL, timeout=TIMEOUT_CAMERA) as r:
                 img = r.read()
                 if len(img) >= 200 and tg_send_media(False, img, "cam.jpg", "image/jpeg", caption, kb, 20):
                     return
@@ -844,7 +894,8 @@ def send_thumbnail(meta, caption, kb=None):
         rel = best.get("relative_path", "")
         if rel:
             try:
-                with urllib.request.urlopen(MOONRAKER + "/server/files/gcodes/" + urllib.parse.quote(rel), timeout=10) as r:
+                with urllib.request.urlopen(MOONRAKER + "/server/files/gcodes/" + urllib.parse.quote(rel),
+                                            timeout=TIMEOUT_THUMBNAIL) as r:
                     img = r.read()
                     if tg_send_media(False, img, "thumb.png", "image/png", caption, kb, 20):
                         return
@@ -890,13 +941,39 @@ def send_timelapse_async(caption, kb=None):
     threading.Thread(target=_timelapse_worker, args=(caption, kb, exclude_files), daemon=True).start()
 
 # ==================== 4. MOONRAKER API ====================
-def moonraker_get(path, timeout=8):
-    try:
-        with urllib.request.urlopen(MOONRAKER + path, timeout=timeout) as r:
-            return json.loads(r.read().decode()).get("result", {})
-    except Exception as e:
-        log.warning("Moonraker error (%s): %s", path, e)
-        return {}
+class MoonrakerClient:
+    """Единая точка доступа к Moonraker: базовый URL, таймауты, лог ошибок.
+    Single access point to Moonraker: base URL, timeouts, error logging."""
+
+    def __init__(self, base=None):
+        self.base = str(base or MOONRAKER).rstrip("/")
+
+    def url(self, path):
+        return self.base + "/" + str(path or "").lstrip("/")
+
+    def get(self, path, timeout=TIMEOUT_MOONRAKER):
+        try:
+            with urllib.request.urlopen(self.url(path), timeout=timeout) as r:
+                return json.loads(r.read().decode()).get("result", {})
+        except Exception as e:
+            log.warning("Moonraker GET %s: %s", path, e)
+            return {}
+
+    def post(self, path, payload=b"", timeout=TIMEOUT_MOONRAKER_FAST):
+        req = urllib.request.Request(self.url(path), data=payload, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+
+    def gcode(self, script, timeout=TIMEOUT_GCODE_LONG):
+        data = urllib.parse.urlencode({"script": script}).encode()
+        return self.post("/printer/gcode/script", data, timeout)
+
+
+MOONRAKER_CLIENT = MoonrakerClient()
+
+
+def moonraker_get(path, timeout=TIMEOUT_MOONRAKER):
+    return MOONRAKER_CLIENT.get(path, timeout)
 
 def detect_environment():
     global GCODES_DIR, TIMELAPSE_DIR, CAM_SNAPSHOT_URL, HAS_CFS
@@ -937,7 +1014,7 @@ def detect_environment():
         ])
         for u in candidates:
             try:
-                with urllib.request.urlopen(u, timeout=2) as r:
+                with urllib.request.urlopen(u, timeout=TIMEOUT_CAMERA_PROBE) as r:
                     if r.read(16).startswith(b"\xff\xd8"):
                         CAM_SNAPSHOT_URL = u
                         break
@@ -947,15 +1024,42 @@ def detect_environment():
     HAS_CFS = ("box" in objs)
 
 def get_print_stats():
-    return moonraker_get("/printer/objects/query?print_stats&display_status&toolhead&extruder&heater_bed", 10).get("status", {})
+    return moonraker_get("/printer/objects/query?print_stats&display_status&toolhead&extruder&heater_bed",
+                         TIMEOUT_MOONRAKER_SLOW).get("status", {})
 
 def get_cfs_status():
-    return moonraker_get("/printer/objects/query?box&filament_rack", 8).get("status", {}) if HAS_CFS else {}
+    return moonraker_get("/printer/objects/query?box&filament_rack",
+                         TIMEOUT_MOONRAKER).get("status", {}) if HAS_CFS else {}
 
 def get_file_meta(filename):
-    return moonraker_get("/server/files/metadata?filename=" + urllib.parse.quote(filename), 5) if filename else {}
+    return moonraker_get("/server/files/metadata?filename=" + urllib.parse.quote(filename),
+                         TIMEOUT_METADATA) if filename else {}
+
+_GCODE_WEIGHTS_CACHE = {}
+
 
 def get_gcode_slot_weights(filename, meta=None):
+    """Вес по слотам с кэшем по (имя, размер, mtime) — панель обновляется часто.
+    Per-slot weights cached by (name, size, mtime) — the panel refreshes often."""
+    cache_key = None
+    if filename and GCODES_DIR:
+        path = os.path.join(GCODES_DIR, filename)
+        try:
+            info = os.stat(path)
+            cache_key = (filename, info.st_size, info.st_mtime)
+            if cache_key in _GCODE_WEIGHTS_CACHE:
+                return list(_GCODE_WEIGHTS_CACHE[cache_key])
+        except OSError:
+            cache_key = None
+    result = _read_gcode_slot_weights(filename, meta)
+    if cache_key and result:
+        if len(_GCODE_WEIGHTS_CACHE) > 8:
+            _GCODE_WEIGHTS_CACHE.clear()
+        _GCODE_WEIGHTS_CACHE[cache_key] = list(result)
+    return result
+
+
+def _read_gcode_slot_weights(filename, meta=None):
     total_w = float((meta or {}).get("filament_weight_total") or 0)
     if meta:
         raw_w = str(meta.get("filament_weight") or meta.get("filament_weights") or "")
@@ -1002,10 +1106,10 @@ def get_gcode_slot_weights(filename, meta=None):
     return []
 
 def get_history_totals():
-    return moonraker_get("/server/history/totals", 5).get("job_totals", {})
+    return moonraker_get("/server/history/totals", TIMEOUT_HISTORY_TOTALS).get("job_totals", {})
 
 def get_history_list(limit=500):
-    return moonraker_get("/server/history/list?limit=%d" % limit, 8).get("jobs", [])
+    return moonraker_get("/server/history/list?limit=%d" % limit, TIMEOUT_HISTORY_LIST).get("jobs", [])
 
 def density_for(meta, fname=""):
     try:
@@ -1047,8 +1151,11 @@ def calc_costs(meta, duration_sec=0, used_mm=0):
 # ==================== 5. УЧЕТ КАТУШЕК ====================
 
 
-def cfg(key):
-    st = load_state()
+def cfg(key, st=None):
+    """Настройка из переданного снимка состояния или с диска.
+    Reads a setting from the given state snapshot or from disk."""
+    if st is None:
+        st = load_state()
     s = st.get("settings") or {}
     if key in s:
         return s[key]
@@ -1071,9 +1178,9 @@ def cfg(key):
     }
     return defaults.get(key)
 
-def cfg_price(mat):
-    prices = cfg("prices") or FILAMENT_PRICE_BY_TYPE
-    return float(prices.get(str(mat).upper(), cfg("price_default")))
+def cfg_price(mat, st=None):
+    prices = cfg("prices", st) or FILAMENT_PRICE_BY_TYPE
+    return float(prices.get(str(mat).upper(), cfg("price_default", st)))
 
 
 # Суммы хранятся в валюте, в которой их ввёл пользователь; символ — только
@@ -1772,9 +1879,7 @@ def _lube_worker(axis):
             "G90", "G1 %s%.1f %s" % (ax_u, hi, feed), "G1 %s%.1f %s" % (ax_u, lo, feed),
             "G1 %s%.1f %s" % (ax_u, hi, feed), "G1 %s%.1f %s" % (ax_u, lo, feed)
         ]
-        url = MOONRAKER + "/printer/gcode/script"
-        with urllib.request.urlopen(url, data=urllib.parse.urlencode({"script": "\n".join(cmds)}).encode(), timeout=300):
-            pass
+        MOONRAKER_CLIENT.gcode("\n".join(cmds), TIMEOUT_GCODE_LONG)
         tg_send("✅ Ось %s успешно прогнана!" % ax_u, MAINT_KB)
     except Exception as e:
         log.exception("Ошибка движения оси %s", axis.upper())
@@ -1786,7 +1891,8 @@ def check_commands():
     log.info("✅ check_commands thread started")
     while True:
         try:
-            res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25}, timeout=30).get("result", [])
+            res = tg_api("getUpdates", {"offset": last_update_id + 1, "timeout": 25},
+                         timeout=TIMEOUT_TG_LONG).get("result", [])
             if not isinstance(res, list) or not res:
                 time.sleep(5)
                 continue
@@ -1997,12 +2103,86 @@ PUBLIC_WEBAPP_URL = ""
 WEBAPP_SECRET = uuid.uuid4().hex
 _hist_cache = {"ts": 0.0, "totals": {}, "h7": 0.0, "h30": 0.0, "ok": 0, "hlen": 0, "d_lbl": [], "d_hrs": []}
 
+ARCHIVE_LIMIT = 12
+FORECAST_MIN_JOBS = 3
+FORECAST_WINDOW_DAYS = 30
+
+
+def _job_display_name(fname):
+    """Короткое имя модели из имени файла.
+    Short model name derived from the G-code file name."""
+    base = os.path.basename(str(fname or "")).strip()
+    for ext in (".gcode", ".gco", ".g"):
+        if base.lower().endswith(ext):
+            base = base[:-len(ext)]
+            break
+    base = base.replace("_", " ").strip()
+    return base[:48] or str(fname or "")
+
+
+def build_archive(history, limit=ARCHIVE_LIMIT):
+    """Компактный архив последних моделей: без тяжёлых полей истории.
+    Compact archive of recent models without heavy history fields."""
+    rows = []
+    for job in history or []:
+        ts = job.get("start_time") or 0
+        if ts <= 0:
+            continue
+        meta = job.get("metadata") or {}
+        fname = str(job.get("filename") or meta.get("filename") or "")
+        dur = job.get("print_duration") or 0
+        used_mm = job.get("filament_used") or 0
+        try:
+            grams = (used_mm / 1000.0) * density_for(meta, fname) if used_mm > 0 else 0.0
+            _, direct, _, _, _ = calc_costs(meta, dur, used_mm)
+        except Exception:
+            grams, direct = 0.0, 0.0
+        rows.append({
+            "name": _job_display_name(fname),
+            "file": fname,
+            "status": str(job.get("status") or ""),
+            "ts": int(ts),
+            "duration": int(dur),
+            "grams": round(grams, 1),
+            "cost": round(direct),
+        })
+    rows.sort(key=lambda x: x["ts"], reverse=True)
+    counts = {}
+    for row in rows:
+        key = row["name"].lower()
+        counts[key] = counts.get(key, 0) + 1
+    out, used = [], set()
+    for row in rows:
+        key = row["name"].lower()
+        if key in used:
+            continue
+        used.add(key)
+        row["repeat"] = counts.get(key, 1)
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _get_cached_stats():
     if time.time() - _hist_cache["ts"] < 60 and _hist_cache["totals"]:
         return _hist_cache
     totals = get_history_totals()
     history = get_history_list(300)
     h_7d, h_30d, _, _, _, ok_all, _ = analyze_history(history)
+    # Темп эксплуатации за окно прогноза: часы и метры в день.
+    # Usage rate for the forecast window: hours and meters per day.
+    now_ts = time.time()
+    window = [j for j in history
+              if (j.get("start_time") or 0) >= now_ts - FORECAST_WINDOW_DAYS * 86400]
+    enough = len(window) >= FORECAST_MIN_JOBS
+    if enough:
+        first_ts = min((j.get("start_time") or now_ts) for j in window)
+        span_days = max(1.0, min(float(FORECAST_WINDOW_DAYS), (now_ts - first_ts) / 86400.0))
+        rate_h = sum((j.get("print_duration") or 0) for j in window) / span_days / 3600.0
+        rate_m = sum((j.get("filament_used") or 0) for j in window) / span_days / 1000.0
+    else:
+        span_days, rate_h, rate_m = 0.0, 0.0, 0.0
     tz = int(cfg("timezone_offset"))
     now_local = datetime.now(timezone.utc) + timedelta(hours=tz)
     days_labels, days_hours = [], []
@@ -2015,8 +2195,184 @@ def _get_cached_stats():
         ts0 = (d_start - epoch).total_seconds()
         sec_sum = sum((j.get("print_duration") or 0) for j in history if ts0 <= (j.get("start_time") or 0) < ts0 + 86400)
         days_hours.append(round(sec_sum / 3600.0, 2))
-    _hist_cache.update({"ts": time.time(), "totals": totals, "h7": h_7d, "h30": h_30d, "ok": ok_all, "hlen": len(history), "d_lbl": days_labels, "d_hrs": days_hours})
+    _hist_cache.update({
+        "ts": time.time(), "totals": totals, "h7": h_7d, "h30": h_30d,
+        "ok": ok_all, "hlen": len(history), "d_lbl": days_labels, "d_hrs": days_hours,
+        "rate_h": rate_h, "rate_m": rate_m, "jobs30": len(window),
+        "enough30": enough, "span_days": round(span_days, 1),
+        "archive": build_archive(history),
+    })
     return _hist_cache
+
+def build_maintenance_forecast(st, cs):
+    """Остаток ресурса ТО в днях и дата замены по темпу печати.
+    Maintenance life left in days and an estimated replacement date."""
+    enough = bool(cs.get("enough30"))
+    rate_h = float(cs.get("rate_h") or 0)
+    rate_m = float(cs.get("rate_m") or 0)
+    totals = cs.get("totals") or {}
+    h_tot = (totals.get("total_time", 0) or 0) / 3600.0
+    m_tot = (totals.get("total_filament_used", 0) or 0) / 1000.0
+    tz = int(cfg("timezone_offset", st) or 0)
+    now_local = datetime.now(timezone.utc) + timedelta(hours=tz)
+    maint_left = max(0.0, (st.get("last_maint_hours", 0) + float(cfg("maint_hours", st))) - h_tot)
+    nozzle_left = max(0.0, float(cfg("nozzle_meters", st))
+                      - max(0.0, m_tot - st.get("nozzle_start_meters", m_tot)))
+    filter_left = max(0.0, float(cfg("filter_hours", st))
+                      - max(0.0, h_tot - st.get("filter_start_hours", h_tot)))
+    ptfe_left = max(0.0, float(cfg("ptfe_meters", st))
+                    - max(0.0, m_tot - st.get("ptfe_start_meters", m_tot)))
+    cutter_left = max(0.0, float(cfg("cutter_cuts", st)) - float(st.get("cutter_cuts", 0) or 0))
+    items = []
+    for key, left, unit, rate in (
+            ("maint", maint_left, "h", rate_h),
+            ("nozzle", nozzle_left, "m", rate_m),
+            ("filter", filter_left, "h", rate_h),
+            ("ptfe", ptfe_left, "m", rate_m),
+            ("cutter", cutter_left, "cuts", 0.0)):
+        days, date = None, ""
+        if enough and rate > 0 and left > 0:
+            days = int(round(left / rate))
+            date = (now_local + timedelta(days=days)).strftime("%Y-%m-%d")
+        items.append({"key": key, "left": round(left, 1), "unit": unit,
+                      "days": days, "date": date})
+    return {
+        "enough_data": enough,
+        "rate_hours": round(rate_h, 2),
+        "rate_meters": round(rate_m, 1),
+        "jobs": int(cs.get("jobs30") or 0),
+        "span_days": cs.get("span_days") or 0,
+        "items": items,
+    }
+
+
+PREFLIGHT_ITEM_KEYS = {
+    "maint": "preflight_item_maint",
+    "nozzle": "preflight_item_nozzle",
+    "filter": "preflight_item_filter",
+    "ptfe": "preflight_item_ptfe",
+}
+
+
+def _find_backup_spool(spools, mat, group, need_g, exclude_id=None):
+    """Запасная катушка того же материала/цвета с достатком граммов.
+    A spare spool of the same material/color with enough grams."""
+    best = None
+    for sp in spools or []:
+        if exclude_id is not None and sp.get("id") == exclude_id:
+            continue
+        if str(sp.get("mat") or "").upper() != str(mat or "").upper():
+            continue
+        sp_group = normalize_color_group(sp.get("group") or sp.get("name") or sp.get("hex"))
+        if group and sp_group != group:
+            continue
+        if float(sp.get("rem_g", 0) or 0) + 0.5 < need_g:
+            continue
+        if best is None or float(sp.get("rem_g", 0)) < float(best.get("rem_g", 0)):
+            best = sp
+    if not best:
+        return None
+    return int(best.get("id", 0)), float(best.get("rem_g", 0))
+
+
+def run_preflight(fname, meta, total_w):
+    """Проверки перед печатью: пластик, тип пластика, ресурс ТО.
+    Pre-flight checks: filament, filament type, maintenance life."""
+    warnings = []
+    st = load_state()
+    slots, active_let = {}, "SINGLE"
+    if HAS_CFS:
+        slots, active_let, _, _ = get_cfs_slots()
+    used = get_used_slots(fname, meta, slots, active_let, total_w) if total_w > 0 else []
+    tracking = bool(cfg("spool_tracking", st))
+    if tracking and used:
+        spools = st.get("spools") or []
+        for let, need in used:
+            slot = slots.get(let) or {"mat": "PLA", "hex": "000000"}
+            sp = resolve_slot_spool(st, let, slot.get("mat", "PLA"),
+                                    slot.get("hex", "000000"), auto_create=False)
+            rem = float((sp or {}).get("rem_g", 0) or 0)
+            if need > 0.5 and rem + 0.5 < need:
+                backup = _find_backup_spool(
+                    spools, (sp or {}).get("mat") or slot.get("mat", "PLA"),
+                    (sp or {}).get("group"), need - rem, (sp or {}).get("id"))
+                warnings.append({"code": "low_filament",
+                                 "args": [let, round(need - rem, 1), round(rem, 1),
+                                          int(backup[0]) if backup else 0,
+                                          round(backup[1], 1) if backup else 0]})
+    raw_types = str(meta.get("filament_type") or "").strip()
+    if raw_types:
+        gcode_mats = [x.strip().upper() for x in raw_types.replace(",", ";").split(";") if x.strip()]
+        for let, _need in used:
+            if let not in slots:
+                continue
+            slot_mat = str(slots[let].get("mat") or "").upper()
+            if slot_mat and gcode_mats and slot_mat not in gcode_mats:
+                warnings.append({"code": "wrong_material",
+                                 "args": [let, ", ".join(gcode_mats), slot_mat]})
+    cs = _get_cached_stats()
+    totals = cs.get("totals") or {}
+    h_tot = (totals.get("total_time", 0) or 0) / 3600.0
+    m_tot = (totals.get("total_filament_used", 0) or 0) / 1000.0
+    est_h = float(meta.get("estimated_time") or 0) / 3600.0
+    est_m = float(meta.get("filament_total") or 0) / 1000.0
+    checks = (
+        ("maint", (st.get("last_maint_hours", 0) + float(cfg("maint_hours", st))) - h_tot, est_h, "h"),
+        ("nozzle", (st.get("nozzle_start_meters", m_tot) + float(cfg("nozzle_meters", st))) - m_tot, est_m, "m"),
+        ("filter", (st.get("filter_start_hours", h_tot) + float(cfg("filter_hours", st))) - h_tot, est_h, "h"),
+        ("ptfe", (st.get("ptfe_start_meters", m_tot) + float(cfg("ptfe_meters", st))) - m_tot, est_m, "m"),
+    )
+    for key, left, need, unit in checks:
+        if left > 0 and need > 0 and left < need:
+            warnings.append({"code": "maintenance",
+                             "args": [key, round(left, 1), round(need, 1), unit]})
+    return warnings
+
+
+def render_preflight_warning(warn):
+    """Текст одного предупреждения pre-flight на языке пользователя.
+    Renders a single pre-flight warning in the user's language."""
+    code = warn.get("code")
+    args = warn.get("args") or []
+    if code == "low_filament" and len(args) >= 5:
+        let, need, rem, backup_id, backup_g = args
+        text = t("preflight_low_filament", let, need, rem)
+        text += "\n  " + (t("preflight_stock_yes", backup_id, backup_g)
+                          if backup_id else t("preflight_stock_no"))
+        return text
+    if code == "wrong_material" and len(args) >= 3:
+        return t("preflight_wrong_mat", args[0], args[1], args[2])
+    if code == "maintenance" and len(args) >= 4:
+        name = t(PREFLIGHT_ITEM_KEYS.get(args[0], "preflight_item_maint"))
+        key = "preflight_maint_m" if args[3] == "m" else "preflight_maint"
+        return t(key, name, args[1], args[2])
+    return ""
+
+
+def preflight_and_notify(fname, meta, total_w):
+    """Сохраняет результат pre-flight и предупреждает в чат только при рисках.
+    Stores pre-flight results and warns in the chat only when risks are found."""
+    try:
+        warnings = run_preflight(fname, meta, total_w)
+    except Exception:
+        log.exception("Pre-flight check failed / ошибка pre-flight")
+        return
+
+    def _apply(st):
+        st["preflight"] = {"file": fname, "ts": time.time(), "warnings": warnings}
+
+    mutate_state(_apply)
+    if not warnings:
+        log.info("Pre-flight OK: %s", fname)
+        return
+    lines = [t("preflight_title"), t("file", esc(fname))]
+    for warn in warnings:
+        text = render_preflight_warning(warn)
+        if text:
+            lines.append(text)
+    lines.extend(["", t("preflight_note")])
+    tg_send("\n".join(lines), MAIN_KB)
+
 
 INITDATA_MAX_AGE = 86400  # сек / seconds: срок жизни initData
 
@@ -2064,6 +2420,20 @@ def verify_tg_init_data(init_data):
         log.warning("initData: ошибка проверки / validation error: %s", e)
         return False
 
+_meta_cache = {"key": None, "ts": 0.0, "data": {}}
+
+
+def get_file_meta_cached(filename, ttl=30.0):
+    """Метаданные G-code с коротким кэшем для панели.
+    G-code metadata with a short cache for the panel."""
+    now = time.time()
+    if _meta_cache["key"] == filename and now - _meta_cache["ts"] < ttl:
+        return _meta_cache["data"]
+    data = get_file_meta(filename)
+    _meta_cache.update({"key": filename, "ts": now, "data": data})
+    return data
+
+
 def build_webapp_payload():
     st = load_state()
     ps_all = get_print_stats()
@@ -2075,7 +2445,8 @@ def build_webapp_payload():
     h_7d, h_30d, ok_all, hlen = cs["h7"], cs["h30"], cs["ok"], cs["hlen"]
     days_labels, days_hours = cs["d_lbl"], cs["d_hrs"]
     slots_out = []
-    cfs_temp, cfs_hum, active_let = "?", "?", "SINGLE"
+    slots, active_let = {}, "SINGLE"
+    cfs_temp, cfs_hum = "?", "?"
     if HAS_CFS:
         slots, active_let, cfs_temp, cfs_hum = get_cfs_slots()
         for let in ("A", "B", "C", "D"):
@@ -2091,20 +2462,73 @@ def build_webapp_payload():
                 })
     h_tot = totals.get("total_time", 0) / 3600.0
     m_tot = totals.get("total_filament_used", 0) / 1000.0
+    # Карточка текущей печати: план, факт и ETA по реальному прогрессу.
+    # Current print card: plan, spent so far and ETA from real progress.
+    job = None
+    state = str(ps.get("state") or "unknown")
+    fname = str(ps.get("filename") or "")
+    total_dur_all = float(ps.get("total_duration", 0) or 0)
+    print_dur_all = float(ps.get("print_duration", 0) or 0)
+    if state in ("printing", "paused") and fname:
+        meta = get_file_meta_cached(fname)
+        progress = float(ds.get("progress", 0) or 0)
+        est = float(meta.get("estimated_time") or 0)
+        planned_w, planned_direct, planned_full, planned_elec, planned_depr = calc_costs(meta, est)
+        thumb_rel = ""
+        thumbs = meta.get("thumbnails") or []
+        if thumbs:
+            best_thumb = max(thumbs, key=lambda x: (x.get("width", 0) * x.get("height", 0)))
+            thumb_rel = str(best_thumb.get("relative_path") or "")
+        plan_g = []
+        if planned_w > 0:
+            for let, part_g in get_used_slots(fname, meta, slots, active_let, planned_w):
+                slot = slots.get(let) or {}
+                sp = resolve_slot_spool(st, let, slot.get("mat", "PLA"),
+                                        slot.get("hex", "000000"), auto_create=False)
+                plan_g.append({
+                    "slot": let,
+                    "mat": (sp or {}).get("mat") or slot.get("mat", ""),
+                    "g": round(part_g, 1),
+                    "rem_g": round(float((sp or {}).get("rem_g", 0) or 0), 1),
+                })
+        eta_ts = None
+        if progress >= 0.02 and print_dur_all > 0:
+            eta_ts = int(time.time() + print_dur_all * (1.0 - progress) / progress)
+        preflight = st.get("preflight") or {}
+        warnings = preflight.get("warnings") if preflight.get("file") == fname else []
+        job = {
+            "active": True, "name": _job_display_name(fname), "file": fname, "state": state,
+            "progress": round(progress * 100, 1),
+            "elapsed": int(print_dur_all), "total_duration": int(total_dur_all),
+            "eta_ts": eta_ts,
+            "thumb": ("/api/thumb?path=" + urllib.parse.quote(thumb_rel)) if thumb_rel else "",
+            "plan_g": plan_g,
+            "cost": {
+                "planned": {
+                    "filament": round(planned_w / 1000.0 * price_for(meta, fname)),
+                    "elec": round(planned_elec), "depr": round(planned_depr),
+                    "total": round(planned_full),
+                },
+                "spent": {"total": round(planned_full * progress)},
+            },
+            "preflight": warnings or [],
+        }
+    print_ratio = round(print_dur_all * 100.0 / total_dur_all, 1) if total_dur_all > 0 else None
+    prep_seconds = int(max(0.0, total_dur_all - print_dur_all))
     mats_m = st.get("materials_meters") or {}
     if mats_m:
         fil_rub = 0.0
         for m_type, meters in mats_m.items():
             dens = DENSITY_G_PER_M.get(m_type, G_PER_M_DEFAULT)
-            fil_rub += ((meters * dens) / 1000.0) * cfg_price(m_type)
+            fil_rub += ((meters * dens) / 1000.0) * cfg_price(m_type, st)
         tracked_m = sum(mats_m.values())
         if m_tot > tracked_m:
-            fil_rub += (((m_tot - tracked_m) * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default"))
+            fil_rub += (((m_tot - tracked_m) * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default", st))
     else:
-        fil_rub = ((m_tot * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default"))
-    elec = h_tot * float(cfg("power_kw")) * float(cfg("elec_price"))
+        fil_rub = ((m_tot * G_PER_M_DEFAULT) / 1000.0) * float(cfg("price_default", st))
+    elec = h_tot * float(cfg("power_kw", st)) * float(cfg("elec_price", st))
     direct = fil_rub + elec
-    depr = h_tot * float(cfg("depr_hour"))
+    depr = h_tot * float(cfg("depr_hour", st))
     ext = ps_all.get("extruder") or {}
     bed = ps_all.get("heater_bed") or {}
     return {
@@ -2114,26 +2538,33 @@ def build_webapp_payload():
         "spools": sorted([s for s in (st.get("spools") or []) if s.get("rem_g", 0) > 0], key=lambda x: x.get("id", 0)),
         "settings": {
             "language": get_language(),
-            "spool_tracking": bool(cfg("spool_tracking")),
-            "timezone_offset": cfg("timezone_offset"),
-            "digest_hour": cfg("digest_hour"),
-            "maint_hours": cfg("maint_hours"),
-            "nozzle_meters": cfg("nozzle_meters"),
-            "filter_hours": cfg("filter_hours"),
-            "ptfe_meters": cfg("ptfe_meters"),
-            "cutter_cuts": cfg("cutter_cuts"),
-            "cfs_humidity": cfg("cfs_humidity"),
-            "elec_price": cfg("elec_price"),
-            "power_kw": cfg("power_kw"),
-            "depr_hour": cfg("depr_hour"),
-            "prices": cfg("prices"),
+            "spool_tracking": bool(cfg("spool_tracking", st)),
+            "timezone_offset": cfg("timezone_offset", st),
+            "digest_hour": cfg("digest_hour", st),
+            "maint_hours": cfg("maint_hours", st),
+            "nozzle_meters": cfg("nozzle_meters", st),
+            "filter_hours": cfg("filter_hours", st),
+            "ptfe_meters": cfg("ptfe_meters", st),
+            "cutter_cuts": cfg("cutter_cuts", st),
+            "cfs_humidity": cfg("cfs_humidity", st),
+            "elec_price": cfg("elec_price", st),
+            "power_kw": cfg("power_kw", st),
+            "depr_hour": cfg("depr_hour", st),
+            "prices": cfg("prices", st),
             "currency": currency_code(),
             "currency_symbol": CURRENCY_SYMBOLS[currency_code()],
         },
+        "job": job,
+        "maintenance_forecast": build_maintenance_forecast(st, cs),
+        "archive": cs.get("archive") or [],
+        "efficiency": {"print_ratio": print_ratio, "prep_seconds": prep_seconds},
         "printer": {
-            "state": ps.get("state", "unknown"), "filename": ps.get("filename", ""),
+            "state": state, "filename": fname,
             "progress": round((ds.get("progress", 0) or 0) * 100, 1),
-            "duration": ps.get("print_duration", 0) or 0,
+            "duration": int(print_dur_all),
+            "total_duration": int(total_dur_all),
+            "prep_seconds": prep_seconds,
+            "print_ratio": print_ratio,
             "layer": info.get("current_layer"), "total_layer": info.get("total_layer"),
             "nozzle_t": round(ext.get("temperature", 0) or 0, 1),
             "nozzle_target": round(ext.get("target", 0) or 0),
@@ -2141,12 +2572,12 @@ def build_webapp_payload():
             "bed_target": round(bed.get("target", 0) or 0)
         },
         "consumables": {
-            "maint_left_h": round(max(0.0, (st.get("last_maint_hours", 0) + float(cfg("maint_hours"))) - h_tot), 1),
-            "maint_max_h": float(cfg("maint_hours")),
-            "nozzle_m": round(max(0.0, m_tot - st.get("nozzle_start_meters", m_tot)), 1), "nozzle_max": float(cfg("nozzle_meters")),
-            "filter_h": round(max(0.0, h_tot - st.get("filter_start_hours", h_tot)), 1), "filter_max": float(cfg("filter_hours")),
-            "ptfe_m": round(max(0.0, m_tot - st.get("ptfe_start_meters", m_tot)), 1), "ptfe_max": float(cfg("ptfe_meters")),
-            "cutter": st.get("cutter_cuts", 0), "cutter_max": int(cfg("cutter_cuts"))
+            "maint_left_h": round(max(0.0, (st.get("last_maint_hours", 0) + float(cfg("maint_hours", st))) - h_tot), 1),
+            "maint_max_h": float(cfg("maint_hours", st)),
+            "nozzle_m": round(max(0.0, m_tot - st.get("nozzle_start_meters", m_tot)), 1), "nozzle_max": float(cfg("nozzle_meters", st)),
+            "filter_h": round(max(0.0, h_tot - st.get("filter_start_hours", h_tot)), 1), "filter_max": float(cfg("filter_hours", st)),
+            "ptfe_m": round(max(0.0, m_tot - st.get("ptfe_start_meters", m_tot)), 1), "ptfe_max": float(cfg("ptfe_meters", st)),
+            "cutter": st.get("cutter_cuts", 0), "cutter_max": int(cfg("cutter_cuts", st))
         },
         "stats": {
             "hours": round(h_tot, 1), "meters": round(m_tot, 1), "spools_cnt": round(m_tot / M_PER_SPOOL, 1),
@@ -2165,7 +2596,7 @@ def _update_bases():
     return list(UPDATE_BASES)
 
 
-def _http_get(url, timeout=20):
+def _http_get(url, timeout=TIMEOUT_OTA_HTTP):
     """GET с таймаутом и явным User-Agent.
     Plain GET with a timeout and an explicit User-Agent."""
     req = urllib.request.Request(url, headers={"User-Agent": "klipper-tg-bot/%s" % VERSION})
@@ -2173,7 +2604,7 @@ def _http_get(url, timeout=20):
         return r.read()
 
 
-def _fetch_first(path, timeout=20):
+def _fetch_first(path, timeout=TIMEOUT_OTA_HTTP):
     """Скачивает path с первого ответившего зеркала.
     Downloads path from the first mirror that responds."""
     errors = []
@@ -2201,13 +2632,18 @@ def _sha256_hex(data):
 
 
 def _safe_relpath(name):
-    """Разрешает только простые имена файлов внутри BASE_DIR.
-    Allows only plain file names inside BASE_DIR (no traversal)."""
-    name = str(name or "").strip()
-    if (not name or name.startswith((".", "/", "\\"))
-            or "/" in name or "\\" in name or ".." in name):
+    """Разрешает относительные пути внутри BASE_DIR, включая подкаталоги.
+    Allows relative paths inside BASE_DIR, subdirectories included."""
+    raw = str(name or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/"):
         return None
-    return name
+    parts = raw.split("/")
+    if len(parts) > 4 or any(not part for part in parts):
+        return None
+    for part in parts:
+        if part.startswith(".") or not re.match(r"^[A-Za-z0-9_.-]+$", part):
+            return None
+    return "/".join(parts)
 
 
 def _load_manifest(raw):
@@ -2263,14 +2699,14 @@ def check_for_updates():
         stamp = int(time.time())
         remote = ""
         try:
-            raw = _http_get("%s/version.txt?v=%d" % (base, stamp), 10)
+            raw = _http_get("%s/version.txt?v=%d" % (base, stamp), TIMEOUT_OTA_VERSION)
             remote = raw.decode("utf-8", "ignore").strip().splitlines()[0].strip() if raw else ""
         except Exception as e:
             errors.append("version.txt @ %s: %s" % (base, e))
         if not remote:
             # Старые репозитории без version.txt / repositories without version.txt.
             try:
-                raw = _http_get("%s/printer_tg_bot.py?v=%d" % (base, stamp), 25)
+                raw = _http_get("%s/printer_tg_bot.py?v=%d" % (base, stamp), TIMEOUT_OTA_CODE)
                 remote = _remote_version_from_code(raw)
             except Exception as e:
                 errors.append("printer_tg_bot.py @ %s: %s" % (base, e))
@@ -2286,7 +2722,7 @@ def check_for_updates():
     if _parse_version(best_version) <= _parse_version(VERSION):
         log.info("Обновлений нет: %s (локально %s) / up to date", best_version, VERSION)
         return None
-    raw_manifest, manifest_src = _fetch_first("manifest.json?v=%s" % best_version, 15)
+    raw_manifest, manifest_src = _fetch_first("manifest.json?v=%s" % best_version, TIMEOUT_OTA_MANIFEST)
     if not raw_manifest:
         _last_check["error"] = "manifest.json: %s" % manifest_src
         log.warning("OTA: %s", _last_check["error"])
@@ -2352,7 +2788,7 @@ def _download_verified(name, meta, dest):
     for base in _update_bases():
         url = "%s/%s?v=%s" % (base, name, meta.get("sha256", "")[:12])
         try:
-            data = _http_get(url, 60)
+            data = _http_get(url, TIMEOUT_OTA_DOWNLOAD)
         except Exception as e:
             last_err = "%s: %s" % (url, e)
             continue
@@ -2363,6 +2799,7 @@ def _download_verified(name, meta, dest):
             last_err = "%s: sha256 mismatch" % url
             log.error("Хеш не совпал / hash mismatch: %s", last_err)
             continue
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
         with open(dest, "wb") as f:
             f.write(data)
             f.flush()
@@ -2429,14 +2866,18 @@ def apply_update(update_info):
         for name in files:
             current = os.path.join(BASE_DIR, name)
             if os.path.exists(current):
-                shutil.copyfile(current, os.path.join(UPDATE_BACKUP, name))
+                backup = os.path.join(UPDATE_BACKUP, name)
+                os.makedirs(os.path.dirname(backup) or UPDATE_BACKUP, exist_ok=True)
+                shutil.copyfile(current, backup)
 
         # 4. Применение / apply.
         stage = "apply"
         _update_set_stage(stage)
         _update_edit(msg_id, t("update_stage_apply"))
         for name in files:
-            os.replace(os.path.join(UPDATE_STAGING, name), os.path.join(BASE_DIR, name))
+            dest = os.path.join(BASE_DIR, name)
+            os.makedirs(os.path.dirname(dest) or BASE_DIR, exist_ok=True)
+            os.replace(os.path.join(UPDATE_STAGING, name), dest)
             replaced.append(name)
         with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -2496,6 +2937,121 @@ def _confirm_pending_update():
         pass
 
 
+# Кэш ответа /api/state: панель открывается мгновенно, а обновление идёт в
+# фоне и не блокирует HTTP-поток запросами к Moonraker.
+# /api/state cache: the panel opens instantly while a background thread
+# refreshes it, so HTTP requests never wait for Moonraker.
+PANEL_CACHE_TTL = 5.0
+_panel_cache = {"ts": 0.0, "data": None}
+_panel_lock = threading.Lock()
+
+# Кэш превью в оперативной памяти: без base64 в printer_state.json.
+# Thumbnail cache in RAM: never base64 inside printer_state.json.
+THUMB_CACHE_MAX_ITEMS = 6
+THUMB_CACHE_MAX_BYTES = 2 * 1024 * 1024
+_thumb_cache = {"order": [], "items": {}, "bytes": 0}
+
+
+def _thumb_cache_get(key):
+    item = _thumb_cache["items"].get(key)
+    if not item:
+        return None
+    try:
+        _thumb_cache["order"].remove(key)
+    except ValueError:
+        pass
+    _thumb_cache["order"].append(key)
+    return item
+
+
+def _thumb_cache_put(key, data):
+    if len(data) > THUMB_CACHE_MAX_BYTES:
+        return
+    old = _thumb_cache["items"].pop(key, None)
+    if old:
+        _thumb_cache["bytes"] -= len(old)
+        try:
+            _thumb_cache["order"].remove(key)
+        except ValueError:
+            pass
+    _thumb_cache["items"][key] = data
+    _thumb_cache["order"].append(key)
+    _thumb_cache["bytes"] += len(data)
+    while _thumb_cache["order"] and (
+            len(_thumb_cache["order"]) > THUMB_CACHE_MAX_ITEMS
+            or _thumb_cache["bytes"] > THUMB_CACHE_MAX_BYTES):
+        old_key = _thumb_cache["order"].pop(0)
+        old_data = _thumb_cache["items"].pop(old_key, None)
+        if old_data:
+            _thumb_cache["bytes"] -= len(old_data)
+
+
+def _safe_thumb_path(path):
+    """Разрешает только превью внутри каталога gcodes.
+    Allows only thumbnails inside the gcodes directory."""
+    rel = str(path or "").strip().replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        return None
+    if parts[0] not in (".thumbs", ".thumbnails", "thumbnails"):
+        return None
+    return "/".join(parts)
+
+
+def _refresh_panel_cache():
+    data = build_webapp_payload()
+    with _panel_lock:
+        _panel_cache["data"] = data
+        _panel_cache["ts"] = time.time()
+    return data
+
+
+def get_panel_payload():
+    """Снимок панели из кэша (первый запрос строит его синхронно).
+    Panel snapshot from cache; the very first request builds it synchronously."""
+    with _panel_lock:
+        data = _panel_cache["data"]
+        ts = _panel_cache["ts"]
+    if data is None:
+        data = _refresh_panel_cache()
+        with _panel_lock:
+            ts = _panel_cache["ts"]
+    age = max(0.0, time.time() - (ts or 0.0))
+    out = dict(data)
+    out["cached_age"] = round(age, 1)
+    out["stale"] = age > PANEL_CACHE_TTL * 3
+    return out
+
+
+def _panel_worker():
+    """Обновляет кэш панели в фоне / refreshes the panel cache in background."""
+    while True:
+        try:
+            _refresh_panel_cache()
+        except Exception:
+            log.exception("Не удалось обновить кэш панели / panel cache refresh failed")
+        time.sleep(PANEL_CACHE_TTL)
+
+
+def _env_worker():
+    """Определяет окружение (камера, CFS) вне HTTP-потоков.
+    Detects the environment (camera, CFS) outside HTTP threads."""
+    while True:
+        try:
+            if not CAM_SNAPSHOT_URL or not HAS_CFS:
+                detect_environment()
+        except Exception:
+            log.exception("detect_environment failed")
+        time.sleep(60)
+
+
+def start_background_workers():
+    """Запускает фоновые воркеры панели и окружения (один раз).
+    Starts the panel and environment workers once."""
+    for target in (_panel_worker, _env_worker):
+        threading.Thread(target=target, daemon=True).start()
+
+
 class WebAppHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
@@ -2511,18 +3067,21 @@ class WebAppHandler(BaseHTTPRequestHandler):
 
     def _check_auth(self, params):
         """Только секрет панели или подписанный initData.
-        Referer/Origin не считаются доверенными.
+        Referer/Origin не считаются доверенными. Ключ и initData принимаются
+        из заголовков (приоритет) или из query — для совместимости.
         Only the panel secret or signed initData is accepted;
-        Referer/Origin headers are untrusted and ignored."""
-        key = str(params.get("key") or "")
+        Referer/Origin headers are untrusted and ignored. The key and initData
+        come from headers (preferred) or the query string (compatibility)."""
+        key = str(self.headers.get("X-App-Key") or params.get("key") or "")
         if WEBAPP_SECRET and key and hmac.compare_digest(key, str(WEBAPP_SECRET)):
             return True
-        return verify_tg_init_data(params.get("initData", ""))
+        init_data = str(self.headers.get("X-Tg-Init-Data") or params.get("initData") or "")
+        return verify_tg_init_data(init_data)
 
     def _handle_api(self, path, params):
         try:
             if path == "/api/state":
-                self._send_json(200, build_webapp_payload())
+                self._send_json(200, get_panel_payload())
             elif path == "/api/spool/delta":
                 self._handle_spool_delta(params)
             elif path == "/api/settings/save":
@@ -2748,11 +3307,41 @@ class WebAppHandler(BaseHTTPRequestHandler):
             return
         ok = True
         try:
-            urllib.request.urlopen(MOONRAKER + endpoint, data=b"", timeout=5).close()
+            MOONRAKER_CLIENT.post(endpoint, b"", TIMEOUT_METADATA)
         except Exception as e:
             log.warning("Printer cmd %s failed: %s", cmd, e)
             ok = False
         self._send_json(200 if ok else 502, {"ok": ok})
+
+    def _handle_thumb(self, params):
+        """Отдаёт превью модели из кэша RAM или из Moonraker.
+        Serves a model thumbnail from the RAM cache or from Moonraker."""
+        safe = _safe_thumb_path(params.get("path"))
+        if not safe:
+            self._send_json(400, {"error": "bad path"})
+            return
+        data = _thumb_cache_get(safe)
+        if data is None:
+            try:
+                with urllib.request.urlopen(
+                        MOONRAKER + "/server/files/gcodes/" + urllib.parse.quote(safe),
+                        timeout=TIMEOUT_THUMBNAIL) as r:
+                    data = r.read()
+            except Exception as e:
+                log.warning("Thumbnail fetch failed (%s): %s", safe, e)
+                data = None
+            if data:
+                _thumb_cache_put(safe, data)
+        if not data:
+            self._send_json(404, {"error": "no thumbnail"})
+            return
+        ctype = "image/png" if data[:8].startswith(b"\x89PNG\r\n\x1a\n") else "image/jpeg"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_light_toggle(self):
         result = {}
@@ -2765,7 +3354,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
         new_on = bool(result.get("on"))
         value = 1 if new_on else 0
         try:
-            objects = moonraker_get("/printer/objects/list", 4).get("objects") or []
+            objects = moonraker_get("/printer/objects/list", TIMEOUT_MOONRAKER_FAST).get("objects") or []
             commands = []
             for obj in objects:
                 low = obj.lower()
@@ -2778,10 +3367,7 @@ class WebAppHandler(BaseHTTPRequestHandler):
                         commands.append("SET_LED LED=%s WHITE=%d RED=%d GREEN=%d BLUE=%d"
                                         % (pin, value, value, value, value))
             if commands:
-                urllib.request.urlopen(
-                    MOONRAKER + "/printer/gcode/script",
-                    data=urllib.parse.urlencode({"script": "\n".join(commands)}).encode(),
-                    timeout=5).close()
+                MOONRAKER_CLIENT.gcode("\n".join(commands), TIMEOUT_METADATA)
         except Exception as e:
             log.warning("Light toggle failed: %s", e)
         self._send_json(200, {"ok": True, "light_on": new_on})
@@ -2829,16 +3415,25 @@ class WebAppHandler(BaseHTTPRequestHandler):
                 self.wfile.write(html)
             else:
                 self._send_json(404, {"error": "webapp.html not found"})
+        elif path == "/api/thumb":
+            # Превью модели — только после авторизации.
+            # Model thumbnails are served only to authenticated clients.
+            if not self._check_auth(qs):
+                self._send_json(403, {"error": "unauthorized"}); return
+            self._handle_thumb(qs)
         elif path == "/api/cam.jpg":
             # Камера — приватные данные: без авторизации не отдаём.
             # Camera frames are private: never serve them unauthenticated.
             if not self._check_auth(qs):
                 self._send_json(403, {"error": "unauthorized"}); return
             img = None
-            if not CAM_SNAPSHOT_URL and time.time() - last_cam_fail_ts > 60: detect_environment()
+            # detect_environment() работает в фоновом потоке (_env_worker),
+            # чтобы запрос кадра не ждал перебора URL камеры.
+            # detect_environment() runs in the background (_env_worker) so a
+            # frame request never waits for camera URL probing.
             if CAM_SNAPSHOT_URL:
                 try:
-                    with urllib.request.urlopen(CAM_SNAPSHOT_URL, timeout=5) as r:
+                    with urllib.request.urlopen(CAM_SNAPSHOT_URL, timeout=TIMEOUT_CAMERA) as r:
                         cand = r.read()
                         if len(cand) > 200: img = cand
                 except Exception as e:
@@ -2978,6 +3573,7 @@ else:
 
 detect_environment()
 start_webapp_services()
+start_background_workers()
 
 STATE_SCHEMA_VERSION = 2
 
@@ -3091,6 +3687,9 @@ while True:
                     t("cost_depr", money(full), money(depr))])
             start_kb = {"inline_keyboard": MAIN_KB["inline_keyboard"] + extra_btns} if extra_btns else MAIN_KB
             send_thumbnail(meta, "\n".join(lines), start_kb)
+            # Предполётный аудит: молчит, если рисков нет.
+            # Pre-flight audit: stays silent when there are no risks.
+            preflight_and_notify(fname, meta, w)
         elif state == "paused" and last_state != "paused":
             if "filament" in msg.lower() or "out of" in msg.lower():
                 p_msg = "%s\n%s" % (t("filament_out"), t("file", esc(fname)))

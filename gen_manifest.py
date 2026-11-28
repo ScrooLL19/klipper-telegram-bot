@@ -12,8 +12,22 @@ import os
 import sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-FILES = ("printer_tg_bot.py", "webapp.html")
+FILES_FILE = os.path.join(BASE, "manifest_files.txt")
+DEFAULT_FILES = ("printer_tg_bot.py", "webapp.html")
 CHUNK = 65536
+
+
+def load_files():
+    """Единый список файлов OTA из manifest_files.txt (или значения по умолчанию).
+    Single OTA file list from manifest_files.txt (falls back to the defaults)."""
+    try:
+        with open(FILES_FILE, encoding="utf-8") as f:
+            names = [ln.strip() for ln in f
+                     if ln.strip() and not ln.strip().startswith("#")]
+    except OSError:
+        names = list(DEFAULT_FILES)
+    unique = list(dict.fromkeys(names))
+    return tuple(unique) or DEFAULT_FILES
 
 
 def sha256_of(path):
@@ -31,7 +45,7 @@ def main(argv):
         raise SystemExit("version.txt is empty")
     min_version = argv[1] if len(argv) > 1 else "1.0.0"
     files = {}
-    for name in FILES:
+    for name in load_files():
         path = os.path.join(BASE, name)
         files[name] = {"sha256": sha256_of(path), "size": os.path.getsize(path)}
     manifest = {"version": version, "min_version": min_version, "files": files}

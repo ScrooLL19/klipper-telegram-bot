@@ -384,6 +384,19 @@
         <button class="btn btn-danger" id="btn-stop" data-i18n="stop_btn">⏹ Стоп</button>
       </div>
     </div>
+    <div class="card" id="job-card" style="display:none">
+      <div class="title" data-i18n="job_title">🧾 Текущая печать</div>
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <img id="job-thumb" alt="" style="width:88px;height:88px;object-fit:cover;border-radius:8px;display:none">
+        <div style="flex:1;min-width:0">
+          <div id="job-name" style="font-weight:600;word-break:break-word;margin-bottom:4px"></div>
+          <div id="job-cost" style="font-size:12px;color:#8b95a5;margin-bottom:2px"></div>
+          <div id="job-plan" style="font-size:12px;color:#8b95a5;margin-bottom:2px"></div>
+          <div id="job-eta" style="font-size:12px;color:#8b95a5"></div>
+        </div>
+      </div>
+      <div id="job-preflight" style="display:none;margin-top:8px;font-size:12px;color:#ffcd3c;line-height:1.5"></div>
+    </div>
   </div>
 
   <!-- Вкладка: Катушки -->
@@ -438,6 +451,14 @@
     <div class="card">
       <div class="title" data-i18n="stats_daily">⏱ Печать по дням (последние 7 дн.)</div>
       <div class="chart-box"><canvas id="bar-chart" width="300" height="180"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="title" data-i18n="eff_title">⏱ Эффективность времени</div>
+      <div id="eff-list"></div>
+    </div>
+    <div class="card">
+      <div class="title" data-i18n="archive_title">🗂 Архив моделей</div>
+      <div id="archive-list"></div>
     </div>
   </div>
 
@@ -712,7 +733,34 @@
         "sort_id_asc": "⇅ № ↑",
         "sort_id_desc": "⇅ № ↓",
         "sort_weight_asc": "⚖ Остаток ↑",
-        "sort_weight_desc": "⚖ Остаток ↓"
+        "sort_weight_desc": "⚖ Остаток ↓",
+        "unit_h": "ч",
+        "unit_min": "мин",
+        "unit_m": "м",
+        "unit_g": "г",
+        "job_title": "🧾 Текущая печать",
+        "job_cost": "Потрачено: {0} из {1}",
+        "job_plan": "План: {0}",
+        "job_eta": "Окончание: {0}",
+        "pf_low": "Слот {0}: не хватает {1} г (остаток {2} г). {3}",
+        "pf_stock_yes": "На складе: катушка #{0} — {1} г.",
+        "pf_stock_no": "Подходящей катушки на складе нет.",
+        "pf_mat": "Слот {0}: G-code требует {1}, в слоте {2}.",
+        "pf_maint": "{0}: осталось {1} ч, задание ~{2} ч.",
+        "pf_maint_m": "{0}: осталось {1} м, задание ~{2} м.",
+        "pf_item_maint": "Плановое ТО",
+        "pf_item_nozzle": "Сопло",
+        "pf_item_filter": "Фильтр",
+        "pf_item_ptfe": "PTFE-трубка",
+        "maint_forecast": "~{0} дн. (до {1})",
+        "maint_forecast_na": "Недостаточно данных для прогноза",
+        "eff_title": "⏱ Эффективность времени",
+        "eff_print": "Чистая печать",
+        "eff_prep": "Подготовка",
+        "archive_title": "🗂 Архив моделей",
+        "archive_empty": "Пока нет завершённых печатей",
+        "archive_repeat": "×{0}",
+        "archive_cost": "{0} г · {1}"
       },
       en: {
         "tab_printer": "Printer",
@@ -821,12 +869,49 @@
         "sort_id_asc": "⇅ № ↑",
         "sort_id_desc": "⇅ № ↓",
         "sort_weight_asc": "⚖ Weight ↑",
-        "sort_weight_desc": "⚖ Weight ↓"
+        "sort_weight_desc": "⚖ Weight ↓",
+        "unit_h": "h",
+        "unit_min": "min",
+        "unit_m": "m",
+        "unit_g": "g",
+        "job_title": "🧾 Current print",
+        "job_cost": "Spent: {0} of {1}",
+        "job_plan": "Plan: {0}",
+        "job_eta": "Finishes: {0}",
+        "pf_low": "Slot {0}: {1} g short ({2} g left). {3}",
+        "pf_stock_yes": "In stock: spool #{0} — {1} g.",
+        "pf_stock_no": "No suitable spool in stock.",
+        "pf_mat": "Slot {0}: G-code expects {1}, slot has {2}.",
+        "pf_maint": "{0}: {1} h left, job ~{2} h.",
+        "pf_maint_m": "{0}: {1} m left, job ~{2} m.",
+        "pf_item_maint": "Scheduled maintenance",
+        "pf_item_nozzle": "Nozzle",
+        "pf_item_filter": "Filter",
+        "pf_item_ptfe": "PTFE tube",
+        "maint_forecast": "~{0} days ({1})",
+        "maint_forecast_na": "Not enough data for a forecast",
+        "eff_title": "⏱ Time efficiency",
+        "eff_print": "Pure printing",
+        "eff_prep": "Preparation",
+        "archive_title": "🗂 Model archive",
+        "archive_empty": "No completed prints yet",
+        "archive_repeat": "×{0}",
+        "archive_cost": "{0} g · {1}"
       }
     };
 
     function t(key) {
       return (I18N[currentLang] && I18N[currentLang][key]) || I18N.ru[key] || key;
+    }
+
+    // Подстановка {0}, {1}, ... в локализованную строку.
+    // Substitutes {0}, {1}, ... into a localized string.
+    function tf(key, ...args) {
+      let text = t(key);
+      args.forEach((value, index) => {
+        text = text.split('{' + index + '}').join(String(value));
+      });
+      return text;
     }
 
     function applyI18n() {
@@ -848,8 +933,7 @@
 
     function setLang(lang) {
       if (!['ru', 'en'].includes(lang)) lang = 'ru';
-      fetch('/api/settings/language?language=' + lang + (API_KEY ? '&key=' + API_KEY : ''))
-        .then(r => r.json())
+      apiPost('/api/settings/language', { language: lang })
         .then(data => {
           if (data.ok) {
             currentLang = lang;
@@ -888,24 +972,23 @@
     }
 
     // ==================== API ====================
-    function authQuery() {
-      const parts = [];
-      if (API_KEY) parts.push('key=' + encodeURIComponent(API_KEY));
-      if (TG_INIT_DATA) parts.push('initData=' + encodeURIComponent(TG_INIT_DATA));
-      return parts.join('&');
-    }
-    function withAuth(url) {
-      const q = authQuery();
-      if (!q) return url;
-      return url + (url.includes('?') ? '&' : '?') + q;
+    // Ключ панели и initData передаются заголовками, а не в URL: они не
+    // попадают в логи прокси и в адресную строку.
+    // The panel key and initData travel in headers, not in the URL, so they
+    // never leak into proxy logs or the address bar.
+    function authHeaders() {
+      const h = {};
+      if (API_KEY) h['X-App-Key'] = API_KEY;
+      if (TG_INIT_DATA) h['X-Tg-Init-Data'] = TG_INIT_DATA;
+      return h;
     }
     function apiGet(url) {
-      return fetch(withAuth(url)).then(r => r.json());
+      return fetch(url, { headers: authHeaders() }).then(r => r.json());
     }
     function apiPost(url, body) {
-      return fetch(withAuth(url), {
+      return fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
         body: JSON.stringify(body || {})
       }).then(r => r.json());
     }
@@ -965,11 +1048,24 @@
       }
       document.getElementById('btn-stop').onclick = () => sendCmd('cancel');
       refreshCam();
+      renderJob();
     }
 
     function refreshCam() {
       const img = document.getElementById('cam-img');
-      img.src = '/api/cam.jpg?' + authQuery() + '&t=' + Date.now();
+      // Кадр забираем через fetch с заголовками авторизации, а не как
+      // <img src=...?key=...>, чтобы ключ не попадал в URL.
+      // Fetch the frame with auth headers instead of <img src=...?key=...>
+      // so the key never appears in the URL.
+      fetch('/api/cam.jpg?t=' + Date.now(), { headers: authHeaders() })
+        .then(r => (r.ok ? r.blob() : Promise.reject(new Error('cam'))))
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          if (img.dataset.blobUrl) URL.revokeObjectURL(img.dataset.blobUrl);
+          img.dataset.blobUrl = url;
+          img.src = url;
+        })
+        .catch(() => {});
     }
 
     function sendCmd(cmd) {
@@ -1170,14 +1266,119 @@
       `;
       renderDonut(s.materials || {});
       renderBarChart(s.days_labels || [], s.days_hours || []);
+      renderEfficiency();
+      renderArchive();
     }
 
     function formatDuration(hours) {
       if (hours <= 0) return '—';
       const h = Math.floor(hours);
       const m = Math.round((hours - h) * 60);
-      if (h > 0) return `${h} ч ${m} мин`;
-      return `${m} мин`;
+      if (h > 0) return `${h} ${t('unit_h')} ${m} ${t('unit_min')}`;
+      return `${m} ${t('unit_min')}`;
+    }
+
+    function formatSeconds(sec) {
+      const total = Math.max(0, Math.round(Number(sec) || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      if (h > 0) return `${h} ${t('unit_h')} ${m} ${t('unit_min')}`;
+      return `${m} ${t('unit_min')}`;
+    }
+
+    function preflightText(warn) {
+      const a = warn.args || [];
+      if (warn.code === 'low_filament') {
+        const stock = a[3] ? tf('pf_stock_yes', a[3], a[4]) : t('pf_stock_no');
+        return tf('pf_low', a[0], a[1], a[2], stock);
+      }
+      if (warn.code === 'wrong_material') return tf('pf_mat', a[0], a[1], a[2]);
+      if (warn.code === 'maintenance') {
+        const key = a[3] === 'm' ? 'pf_maint_m' : 'pf_maint';
+        return tf(key, t('pf_item_' + a[0]), a[1], a[2]);
+      }
+      return '';
+    }
+
+    function loadJobThumb(url) {
+      const img = document.getElementById('job-thumb');
+      if (!img) return;
+      if (!url) { img.style.display = 'none'; return; }
+      if (img.dataset.src === url) return;
+      img.dataset.src = url;
+      fetch(url, { headers: authHeaders() })
+        .then(r => (r.ok ? r.blob() : Promise.reject(new Error('thumb'))))
+        .then(blob => {
+          if (img.dataset.blobUrl) URL.revokeObjectURL(img.dataset.blobUrl);
+          const obj = URL.createObjectURL(blob);
+          img.dataset.blobUrl = obj;
+          img.src = obj;
+          img.style.display = 'block';
+        })
+        .catch(() => { img.style.display = 'none'; });
+    }
+
+    function renderJob() {
+      const card = document.getElementById('job-card');
+      if (!card) return;
+      const job = STATE.job;
+      if (!job || !job.active) { card.style.display = 'none'; return; }
+      card.style.display = 'block';
+      document.getElementById('job-name').textContent = job.name || '';
+      const planned = (job.cost && job.cost.planned) ? job.cost.planned.total : 0;
+      const spent = (job.cost && job.cost.spent) ? job.cost.spent.total : 0;
+      document.getElementById('job-cost').textContent = tf('job_cost', money(spent), money(planned));
+      const plan = (job.plan_g || [])
+        .map(p => `${p.slot}: ${p.g} ${t('unit_g')}${p.mat ? ' ' + p.mat : ''}`)
+        .join(' · ');
+      document.getElementById('job-plan').textContent = plan ? tf('job_plan', plan) : '';
+      const eta = document.getElementById('job-eta');
+      eta.textContent = job.eta_ts ? tf('job_eta', new Date(job.eta_ts * 1000).toLocaleString()) : '';
+      const pf = document.getElementById('job-preflight');
+      const warnings = job.preflight || [];
+      if (warnings.length) {
+        pf.style.display = 'block';
+        pf.innerHTML = warnings.map(w => '⚠️ ' + preflightText(w)).join('<br>');
+      } else {
+        pf.style.display = 'none';
+        pf.innerHTML = '';
+      }
+      loadJobThumb(job.thumb);
+    }
+
+    function renderEfficiency() {
+      const box = document.getElementById('eff-list');
+      if (!box) return;
+      const p = STATE.printer || {};
+      if (p.print_ratio === null || p.print_ratio === undefined) {
+        box.innerHTML = `<div style="font-size:12px;color:#8b95a5">${t('maint_forecast_na')}</div>`;
+        return;
+      }
+      box.innerHTML = `
+        <div class="stat-row"><span class="label">${t('eff_print')}</span><span class="val">${Number(p.print_ratio).toFixed(1)}%</span></div>
+        <div class="stat-row"><span class="label">${t('eff_prep')}</span><span class="val">${formatSeconds(p.prep_seconds)}</span></div>
+      `;
+    }
+
+    function renderArchive() {
+      const box = document.getElementById('archive-list');
+      if (!box) return;
+      const rows = STATE.archive || [];
+      if (!rows.length) {
+        box.innerHTML = `<div style="font-size:12px;color:#8b95a5">${t('archive_empty')}</div>`;
+        return;
+      }
+      box.innerHTML = rows.map(row => {
+        const ok = row.status === 'completed';
+        const dateStr = new Date(row.ts * 1000).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+        const repeat = row.repeat > 1 ? ` <span style="color:#8b95a5">${tf('archive_repeat', row.repeat)}</span>` : '';
+        return `
+          <div class="stat-row" style="align-items:flex-start">
+            <span class="label" style="flex:1;min-width:0;word-break:break-word">${ok ? '✅' : '❌'} ${row.name}${repeat}</span>
+            <span class="val" style="text-align:right;white-space:nowrap;font-size:12px">${dateStr}<br>${formatSeconds(row.duration)} · ${tf('archive_cost', row.grams, money(row.cost))}</span>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderDonut(mats) {
@@ -1230,16 +1431,31 @@
 
     function renderMaint() {
       const c = STATE.consumables || {};
+      const fc = STATE.maintenance_forecast || {};
+      const forecast = {};
+      (fc.items || []).forEach(it => { forecast[it.key] = it; });
       const div = document.getElementById('maint-list');
       const items = [
-        { label: '🛠 ' + t('maint_interval'), val: c.maint_left_h, max: c.maint_max_h, unit: 'ч' },
-        { label: '🔥 ' + t('nozzle_limit'), val: c.nozzle_m, max: c.nozzle_max, unit: 'м' },
-        { label: '🌬 ' + t('filter_limit'), val: c.filter_h, max: c.filter_max, unit: 'ч' },
-        { label: '➰ ' + t('ptfe_limit'), val: c.ptfe_m, max: c.ptfe_max, unit: 'м' },
-        { label: '✂️ ' + t('cutter_limit'), val: c.cutter, max: c.cutter_max, unit: '' }
+        { key: 'maint', label: '🛠 ' + t('maint_interval'), val: c.maint_left_h, max: c.maint_max_h, unit: t('unit_h') },
+        { key: 'nozzle', label: '🔥 ' + t('nozzle_limit'), val: c.nozzle_m, max: c.nozzle_max, unit: t('unit_m') },
+        { key: 'filter', label: '🌬 ' + t('filter_limit'), val: c.filter_h, max: c.filter_max, unit: t('unit_h') },
+        { key: 'ptfe', label: '➰ ' + t('ptfe_limit'), val: c.ptfe_m, max: c.ptfe_max, unit: t('unit_m') },
+        { key: 'cutter', label: '✂️ ' + t('cutter_limit'), val: c.cutter, max: c.cutter_max, unit: '' }
       ];
       div.innerHTML = items.map(it => {
         const pct = it.max > 0 ? Math.min(100, (it.val / it.max) * 100) : 0;
+        const f = forecast[it.key];
+        let fcText = '';
+        if (f) {
+          if (f.days !== null && f.days !== undefined) {
+            const dateStr = f.date
+              ? new Date(f.date + 'T00:00:00').toLocaleDateString(undefined, { day: '2-digit', month: 'short' })
+              : '';
+            fcText = tf('maint_forecast', f.days, dateStr);
+          } else {
+            fcText = t('maint_forecast_na');
+          }
+        }
         return `
           <div style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
@@ -1247,6 +1463,7 @@
               <span>${it.val.toFixed(1)}${it.unit} / ${it.max}${it.unit}</span>
             </div>
             <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+            <div style="font-size:11px;color:#8b95a5;margin-top:3px">${fcText}</div>
           </div>
         `;
       }).join('');
